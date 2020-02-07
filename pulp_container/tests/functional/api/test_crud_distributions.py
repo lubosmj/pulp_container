@@ -8,7 +8,6 @@ from itertools import permutations
 from pulp_smash import utils
 from pulp_smash.pulp3.utils import gen_distribution
 
-from pulp_container.tests.functional.constants import CONTAINER_DISTRIBUTION_PATH
 from pulp_container.tests.functional.utils import set_up_module as setUpModule  # noqa:F401
 from pulp_container.tests.functional.utils import skip_if, gen_container_client, monitor_task, configuration
 
@@ -25,8 +24,8 @@ class CRUDContainerDistributionsTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Create class wide-variables."""
-        cls.client_api = gen_container_client()
-        cls.distribution_api = DistributionsContainerApi(cls.client_api)
+        client_api = gen_container_client()
+        cls.distribution_api = DistributionsContainerApi(client_api)
         cls.distribution = {}
 
     def test_01_create_distribution(self):
@@ -162,10 +161,7 @@ class CRUDContainerDistributionsTestCase(unittest.TestCase):
         Assert response returns an error 400 including ["Unexpected field"].
         """
         with self.assertRaises(ApiException) as exc:
-            self.client_api.call_api(
-                CONTAINER_DISTRIBUTION_PATH, "POST", body=gen_distribution(foo="bar"),
-                auth_settings=["Basic"]
-            )
+            self.distribution_api.create(gen_distribution(foo="bar"))
 
         assert exc.exception.status == 400
         assert json.loads(exc.exception.body)["foo"] == ["Unexpected field"]
@@ -185,8 +181,8 @@ class DistributionBasePathTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Create class-wide variables."""
-        cls.client_api = gen_container_client()
-        cls.distribution_api = DistributionsContainerApi(cls.client_api)
+        client_api = gen_container_client()
+        cls.distribution_api = DistributionsContainerApi(client_api)
 
         body = gen_distribution()
         body["base_path"] = body["base_path"].replace("-", "/")
@@ -194,13 +190,12 @@ class DistributionBasePathTestCase(unittest.TestCase):
         distribution_response = cls.distribution_api.create(distribution_data)
         created_resources = monitor_task(distribution_response.task)
 
-        distribution_obj = cls.distribution_api.read(created_resources[0])
-        cls.distribution = distribution_obj.to_dict()
+        cls.distribution = cls.distribution_api.read(created_resources[0])
 
     @classmethod
     def tearDownClass(cls):
         """Clean up resources."""
-        cls.distribution_api.delete(cls.distribution["pulp_href"])
+        cls.distribution_api.delete(cls.distribution.pulp_href)
 
     def test_spaces(self):
         """Test that spaces can not be part of ``base_path``."""
@@ -219,7 +214,7 @@ class DistributionBasePathTestCase(unittest.TestCase):
 
     def test_unique_base_path(self):
         """Test that ``base_path`` can not be duplicated."""
-        self.try_create_distribution(base_path=self.distribution["base_path"])
+        self.try_create_distribution(base_path=self.distribution.base_path)
 
     def try_create_distribution(self, **kwargs):
         """Unsuccessfully create a distribution.
@@ -229,9 +224,7 @@ class DistributionBasePathTestCase(unittest.TestCase):
         body = gen_distribution()
         body.update(kwargs)
         with self.assertRaises(ApiException):
-            self.client_api.call_api(
-                CONTAINER_DISTRIBUTION_PATH, "POST", body=body, auth_settings=["Basic"]
-            )
+            self.distribution_api.create(body)
 
     def try_update_distribution(self, **kwargs):
         """Unsuccessfully update a distribution with HTTP PATCH.
@@ -239,6 +232,4 @@ class DistributionBasePathTestCase(unittest.TestCase):
         Use the given kwargs as the body of the request.
         """
         with self.assertRaises(ApiException):
-            self.client_api.call_api(
-                self.distribution["pulp_href"], "PATCH", body=kwargs, auth_settings=["Basic"]
-            )
+            self.distribution_api.partial_update(self.distribution.pulp_href, kwargs)

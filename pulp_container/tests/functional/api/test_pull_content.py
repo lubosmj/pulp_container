@@ -279,10 +279,10 @@ class PullOnDemandContentTestCase(unittest.TestCase):
         cls.cfg = config.get_config()
         generate_token_signing_keys(cls.cfg)
 
-        cls.client_api = gen_container_client()
-        cls.repositories_api = RepositoriesContainerApi(cls.client_api)
-        cls.remotes_api = RemotesContainerApi(cls.client_api)
-        cls.distributions_api = DistributionsContainerApi(cls.client_api)
+        client_api = gen_container_client()
+        cls.repositories_api = RepositoriesContainerApi(client_api)
+        cls.remotes_api = RemotesContainerApi(client_api)
+        cls.distributions_api = DistributionsContainerApi(client_api)
 
         cls.teardown_cleanups = []
 
