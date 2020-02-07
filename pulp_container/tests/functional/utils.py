@@ -65,23 +65,23 @@ def gen_container_remote(url=REGISTRY_V2_FEED_URL, **kwargs):
 def get_docker_hub_remote_blobsums(upstream_name=REPO_UPSTREAM_NAME):
     """Get remote blobsum list from dockerhub registry."""
     token_url = (
-        'https://auth.docker.io/token'
-        '?service=registry.docker.io'
-        '&scope=repository:library/{0}:pull'
+        "https://auth.docker.io/token"
+        "?service=registry.docker.io"
+        "&scope=repository:library/{0}:pull"
     ).format(upstream_name)
     token_response = requests.get(token_url)
     token_response.raise_for_status()
-    token = token_response.json()['token']
+    token = token_response.json()["token"]
 
     blob_url = (
-        '{0}/v2/library/{1}/manifests/latest'
+        "{0}/v2/library/{1}/manifests/latest"
     ).format(REGISTRY_V2_FEED_URL, upstream_name)
     response = requests.get(
         blob_url,
-        headers={'Authorization': 'Bearer ' + token}
+        headers={"Authorization": "Bearer " + token}
     )
     response.raise_for_status()
-    return response.json()['fsLayers']
+    return response.json()["fsLayers"]
 
 
 def get_container_image_paths(repo, version_href=None):
@@ -92,7 +92,7 @@ def get_container_image_paths(repo, version_href=None):
     :returns: A list with the paths of units present in a given repository.
     """
     return [
-        content_unit['_artifact']
+        content_unit["_artifact"]
         for content_unit
         in get_content(repo, version_href)[CONTAINER_CONTENT_NAME]
     ]
@@ -137,7 +137,7 @@ class BearerTokenAuth(AuthBase):
 
     def __call__(self, r):
         """Attaches a Bearer token authentication to the given request object."""
-        r.headers['Authorization'] = 'Bearer {}'.format(self.token)
+        r.headers["Authorization"] = "Bearer {}".format(self.token)
         return r
 
 
