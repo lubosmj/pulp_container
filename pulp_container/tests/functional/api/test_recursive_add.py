@@ -12,8 +12,26 @@ from pulp_container.tests.functional.constants import (
     CONTAINER_REPO_PATH,
     DOCKERHUB_PULP_FIXTURE_1,
 )
-from pulp_container.tests.functional.utils import gen_container_remote
+from pulp_container.tests.functional.utils import (
+    gen_container_remote,
+    gen_container_client,
+    monitor_task
+)
 from pulp_container.constants import MEDIA_TYPE
+
+from pulpcore.client.pulp_container import (
+    ApiException,
+    RemotesContainerApi,
+    RepositoriesContainerApi,
+    ContainerContainerRepository,
+    ContainerContainerRemote,
+    ContentTagsApi,
+    RepositoriesContainerVersionsApi,
+    RepositorySyncURL,
+    ContentManifestsApi,
+    ContainerBlob,
+    ManifestCopy
+)
 
 
 class TestManifestCopy(unittest.TestCase):
@@ -27,70 +45,88 @@ class TestManifestCopy(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Sync pulp/test-fixture-1 so we can copy content from it."""
-        cls.cfg = config.get_config()
-        cls.client = api.Client(cls.cfg, api.json_handler)
-        cls.from_repo = cls.client.post(CONTAINER_REPO_PATH, gen_repo())
+        api_client = gen_container_client()
+        cls.repositories_api = RepositoriesContainerApi(api_client)
+        cls.versions_api = RepositoriesContainerVersionsApi(api_client)
+        cls.remotes_api = RemotesContainerApi(api_client)
+        cls.tags_api = ContentTagsApi(api_client)
+        cls.manifests_api = ContentManifestsApi(api_client)
+
+        cls.from_repo = cls.repositories_api.create(ContainerContainerRepository(**gen_repo()))
+
         remote_data = gen_container_remote(upstream_name=DOCKERHUB_PULP_FIXTURE_1)
-        cls.remote = cls.client.post(CONTAINER_REMOTE_PATH, remote_data)
-        sync(cls.cfg, cls.remote, cls.from_repo)
-        latest_version = cls.client.get(cls.from_repo['pulp_href'])['latest_version_href']
-        cls.latest_from_version = "repository_version={version}".format(version=latest_version)
+        cls.remote = cls.remotes_api.create(ContainerContainerRemote(**remote_data))
+
+        sync_data = RepositorySyncURL(remote=cls.remote.pulp_href)
+
+        sync_response = cls.repositories_api.sync(cls.from_repo.pulp_href, sync_data)
+        monitor_task(sync_response.task)
+
+        cls.latest_from_version = cls.repositories_api.read(
+            cls.from_repo.pulp_href
+        ).latest_version_href
 
     def setUp(self):
         """Create an empty repository to copy into."""
-        self.to_repo = self.client.post(CONTAINER_REPO_PATH, gen_repo())
-        self.CONTAINER_MANIFEST_COPY_PATH = f'{self.to_repo["pulp_href"]}copy_manifests/'
-        self.addCleanup(self.client.delete, self.to_repo['pulp_href'])
+        self.to_repo = self.repositories_api.create(ContainerContainerRepository(**gen_repo()))
+        self.addCleanup(self.repositories_api.delete, self.to_repo.pulp_href)
 
     @classmethod
     def tearDownClass(cls):
         """Delete things made in setUpClass. addCleanup feature does not work with setupClass."""
-        cls.client.delete(cls.from_repo['pulp_href'])
-        cls.client.delete(cls.remote['pulp_href'])
+        cls.repositories_api.delete(cls.from_repo.pulp_href)
+        cls.repositories_api.delete(cls.remote.pulp_href)
 
     def test_missing_repository_argument(self):
         """Ensure source_repository or source_repository_version is required."""
-        with self.assertRaises(HTTPError) as context:
-            self.client.post(self.CONTAINER_MANIFEST_COPY_PATH)
-        self.assertEqual(context.exception.response.status_code, 400)
+        with self.assertRaises(ApiException) as context:
+            self.repositories_api.copy_manifests(self.to_repo.pulp_href, {})
+        self.assertEqual(context.exception.status, 400)
 
     def test_empty_source_repository(self):
         """Ensure exception is raised when source_repository does not have latest version."""
-        self.client.delete(self.to_repo['latest_version_href'])
-        with self.assertRaises(HTTPError) as context:
-            self.client.post(
-                self.CONTAINER_MANIFEST_COPY_PATH,
+        delete_response = self.repositories_api.delete(self.to_repo.latest_version_href)
+        monitor_task(delete_response.task)
+        with self.assertRaises(ApiException) as context:
+            self.repositories_api.copy_manifests(
+                self.to_repo.pulp_href,
                 {
                     # to_repo has no versions, use it as source
-                    'source_repository': self.to_repo['pulp_href'],
+                    'source_repository': self.to_repo.pulp_href,
                 }
             )
-        self.assertEqual(context.exception.response.status_code, 400)
+        self.assertEqual(context.exception.status, 400)
 
     def test_source_repository_and_source_version(self):
         """Passing source_repository_version and repository returns a 400."""
-        with self.assertRaises(HTTPError) as context:
-            self.client.post(
-                self.CONTAINER_MANIFEST_COPY_PATH,
+        with self.assertRaises(ApiException) as context:
+            self.repositories_api.copy_manifests(
+                self.to_repo.pulp_href,
                 {
-                    'source_repository': self.from_repo['pulp_href'],
-                    'source_repository_version': self.from_repo['latest_version_href'],
+                    'source_repository': self.from_repo.pulp_href,
+                    'source_repository_version': self.from_repo.latest_version_href,
                 }
             )
-        self.assertEqual(context.exception.response.status_code, 400)
+        self.assertEqual(context.exception.status, 400)
 
     def test_copy_all_manifests(self):
         """Passing only source repository copies all manifests."""
-        self.client.post(
-            self.CONTAINER_MANIFEST_COPY_PATH,
+        copy_response = self.repositories_api.copy_manifests(
+            self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo['pulp_href'],
+                'source_repository': self.from_repo.pulp_href,
             }
         )
-        latest_to_repo_href = self.client.get(self.to_repo['pulp_href'])['latest_version_href']
-        latest_from_repo_href = self.client.get(self.from_repo['pulp_href'])['latest_version_href']
-        to_repo_content = self.client.get(latest_to_repo_href)['content_summary']['present']
-        from_repo_content = self.client.get(latest_from_repo_href)['content_summary']['present']
+        monitor_task(copy_response.task)
+
+        latest_to = self.repositories_api.read(self.to_repo.pulp_href)
+        latest_from = self.repositories_api.read(self.from_repo.pulp_href)
+        to_repo_content = self.versions_api.read(
+            latest_to.latest_version_href
+        ).content_summary.present
+        from_repo_content = self.versions_api.read(
+            latest_from.latest_version_href
+        ).content_summary.present
         for container_type in ['container.manifest', 'container.blob']:
             self.assertEqual(
                 to_repo_content[container_type]['count'],
@@ -101,16 +137,22 @@ class TestManifestCopy(unittest.TestCase):
 
     def test_copy_all_manifests_from_version(self):
         """Passing only source version copies all manifests."""
-        latest_from_repo_href = self.client.get(self.from_repo['pulp_href'])['latest_version_href']
-        self.client.post(
-            self.CONTAINER_MANIFEST_COPY_PATH,
+        latest_from = self.repositories_api.read(self.from_repo.pulp_href)
+        copy_response = self.repositories_api.copy_manifests(
+            self.to_repo.pulp_href,
             {
-                'source_repository_version': latest_from_repo_href,
+                'source_repository_version': latest_from.latest_version_href,
             }
         )
-        latest_to_repo_href = self.client.get(self.to_repo['pulp_href'])['latest_version_href']
-        to_repo_content = self.client.get(latest_to_repo_href)['content_summary']['present']
-        from_repo_content = self.client.get(latest_from_repo_href)['content_summary']['present']
+        monitor_task(copy_response.task)
+
+        latest_to = self.repositories_api.read(self.to_repo.pulp_href)
+        to_repo_content = self.versions_api.read(
+            latest_to.latest_version_href
+        ).content_summary.present
+        from_repo_content = self.versions_api.read(
+            latest_from.latest_version_href
+        ).content_summary.present
         for container_type in ['container.manifest', 'container.blob']:
             self.assertEqual(
                 to_repo_content[container_type]['count'],
@@ -120,153 +162,181 @@ class TestManifestCopy(unittest.TestCase):
 
     def test_copy_manifest_by_digest(self):
         """Specify a single manifest by digest to copy."""
-        manifest_a_href = self.client.get("{unit_path}?{filters}".format(
-            unit_path=CONTAINER_TAG_PATH,
-            filters="name=manifest_a&{v_filter}".format(v_filter=self.latest_from_version),
-        ))['results'][0]['tagged_manifest']
-        manifest_a_digest = self.client.get(manifest_a_href)['digest']
-        self.client.post(
-            self.CONTAINER_MANIFEST_COPY_PATH,
+        manifest_a_href = self.tags_api.list(
+            name="manifest_a",
+            repository_version=self.latest_from_version
+        ).results[0].tagged_manifest
+        manifest_a_digest = self.manifests_api.read(manifest_a_href).digest
+        copy_response = self.repositories_api.copy_manifests(
+            self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo['pulp_href'],
+                'source_repository': self.from_repo.pulp_href,
                 'digests': [manifest_a_digest]
             }
         )
-        latest_to_repo_href = self.client.get(self.to_repo['pulp_href'])['latest_version_href']
-        to_repo_content = self.client.get(latest_to_repo_href)['content_summary']['present']
+        monitor_task(copy_response.task)
+
+        to_repo = self.repositories_api.read(self.to_repo.pulp_href)
+        to_repo_content = self.versions_api.read(
+            to_repo.latest_version_href
+        ).content_summary.present
         self.assertFalse('container.tag' in to_repo_content)
-        self.assertEqual(to_repo_content['container.manifest']['count'], 1)
+        self.assertEqual(to_repo_content['container.manifest']['count'], '1')
         # manifest_a has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], 2)
+        self.assertEqual(to_repo_content['container.blob']['count'], '2')
 
     def test_copy_manifest_by_digest_and_media_type(self):
         """Specify a single manifest by digest to copy."""
-        manifest_a_href = self.client.get("{unit_path}?{filters}".format(
-            unit_path=CONTAINER_TAG_PATH,
-            filters="name=manifest_a&{v_filter}".format(v_filter=self.latest_from_version),
-        ))['results'][0]['tagged_manifest']
-        manifest_a_digest = self.client.get(manifest_a_href)['digest']
-        self.client.post(
-            self.CONTAINER_MANIFEST_COPY_PATH,
+        manifest_a_href = self.tags_api.list(
+            name="manifest_a",
+            repository_version=self.latest_from_version
+        ).results[0].tagged_manifest
+        manifest_a_digest = self.manifests_api.read(manifest_a_href).digest
+        copy_response = self.repositories_api.copy_manifests(
+            self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo['pulp_href'],
+                'source_repository': self.from_repo.pulp_href,
                 'digests': [manifest_a_digest],
                 'media_types': [MEDIA_TYPE.MANIFEST_V2]
             }
         )
-        latest_to_repo_href = self.client.get(self.to_repo['pulp_href'])['latest_version_href']
-        to_repo_content = self.client.get(latest_to_repo_href)['content_summary']['present']
+        monitor_task(copy_response.task)
+
+        to_repo = self.repositories_api.read(self.to_repo.pulp_href)
+        to_repo_content = self.versions_api.read(
+            to_repo.latest_version_href
+        ).content_summary.present
         self.assertFalse('container.tag' in to_repo_content)
-        self.assertEqual(to_repo_content['container.manifest']['count'], 1)
+        self.assertEqual(to_repo_content['container.manifest']['count'], '1')
         # manifest_a has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], 2)
+        self.assertEqual(to_repo_content['container.blob']['count'], '2')
 
     def test_copy_all_manifest_lists_by_media_type(self):
         """Specify the media_type, to copy all manifest lists."""
-        self.client.post(
-            self.CONTAINER_MANIFEST_COPY_PATH,
+        copy_response = self.repositories_api.copy_manifests(
+            self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo['pulp_href'],
+                'source_repository': self.from_repo.pulp_href,
                 'media_types': [MEDIA_TYPE.MANIFEST_LIST]
             }
         )
-        latest_to_repo_href = self.client.get(self.to_repo['pulp_href'])['latest_version_href']
-        to_repo_content = self.client.get(latest_to_repo_href)['content_summary']['present']
+        monitor_task(copy_response.task)
+
+        to_repo = self.repositories_api.read(self.to_repo.pulp_href)
+        to_repo_content = self.versions_api.read(
+            to_repo.latest_version_href
+        ).content_summary.present
         self.assertFalse('container.tag' in to_repo_content)
         # Fixture has 4 manifest lists, which combined reference 5 manifests
-        self.assertEqual(to_repo_content['container.manifest']['count'], 9)
+        self.assertEqual(to_repo_content['container.manifest']['count'], '9')
         # each manifest (non-list) has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], 10)
+        self.assertEqual(to_repo_content['container.blob']['count'], '10')
 
     def test_copy_all_manifests_by_media_type(self):
         """Specify the media_type, to copy all manifest lists."""
-        self.client.post(
-            self.CONTAINER_MANIFEST_COPY_PATH,
+        copy_response = self.repositories_api.copy_manifests(
+            self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo['pulp_href'],
+                'source_repository': self.from_repo.pulp_href,
                 'media_types': [MEDIA_TYPE.MANIFEST_V1, MEDIA_TYPE.MANIFEST_V2]
             }
         )
-        latest_to_repo_href = self.client.get(self.to_repo['pulp_href'])['latest_version_href']
-        to_repo_content = self.client.get(latest_to_repo_href)['content_summary']['present']
+        monitor_task(copy_response.task)
+
+        to_repo = self.repositories_api.read(self.to_repo.pulp_href)
+        to_repo_content = self.versions_api.read(
+            to_repo.latest_version_href
+        ).content_summary.present
         self.assertFalse('container.tag' in to_repo_content)
         # Fixture has 5 manifests that aren't manifest lists
-        self.assertEqual(to_repo_content['container.manifest']['count'], 5)
+        self.assertEqual(to_repo_content['container.manifest']['count'], '5')
         # each manifest (non-list) has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], 10)
+        self.assertEqual(to_repo_content['container.blob']['count'], '10')
 
     def test_fail_to_copy_invalid_manifest_media_type(self):
         """Specify the media_type, to copy all manifest lists."""
-        with self.assertRaises(HTTPError) as context:
-            self.client.post(
-                self.CONTAINER_MANIFEST_COPY_PATH,
+        with self.assertRaises(ApiException) as context:
+            self.repositories_api.copy_manifests(
+                self.to_repo.pulp_href,
                 {
-                    'source_repository': self.from_repo['pulp_href'],
+                    'source_repository': self.from_repo.pulp_href,
                     'media_types': ['wrongwrongwrong']
                 }
             )
-        self.assertEqual(context.exception.response.status_code, 400)
+        self.assertEqual(context.exception.status, 400)
 
     def test_copy_by_digest_with_incorrect_media_type(self):
         """Ensure invalid media type will raise a 400."""
-        ml_i_href = self.client.get("{unit_path}?{filters}".format(
-            unit_path=CONTAINER_TAG_PATH,
-            filters="name=ml_i&{v_filter}".format(v_filter=self.latest_from_version),
-        ))['results'][0]['tagged_manifest']
-        ml_i_digest = self.client.get(ml_i_href)['digest']
-        self.client.post(
-            self.CONTAINER_MANIFEST_COPY_PATH,
+        ml_i_href = self.tags_api.list(
+            name="ml_i",
+            repository_version=self.latest_from_version
+        ).results[0].tagged_manifest
+        ml_i_digest = self.manifests_api.read(ml_i_href).digest
+        copy_response = self.repositories_api.copy_manifests(
+            self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo['pulp_href'],
+                'source_repository': self.from_repo.pulp_href,
                 'digests': [ml_i_digest],
                 'media_types': [MEDIA_TYPE.MANIFEST_V2]
             }
         )
-        latest_to_repo_href = self.client.get(self.to_repo['pulp_href'])['latest_version_href']
+        monitor_task(copy_response.task)
+
+        latest_to_repo_href = self.repositories_api.read(
+            self.to_repo.pulp_href
+        ).latest_version_href
         # Assert no version created
-        self.assertEqual(latest_to_repo_href, f"{self.to_repo['pulp_href']}versions/0/")
+        self.assertEqual(latest_to_repo_href, f"{self.to_repo.pulp_href}versions/0/")
 
     def test_copy_multiple_manifests_by_digest(self):
         """Specify digests to copy."""
-        ml_i_href = self.client.get("{unit_path}?{filters}".format(
-            unit_path=CONTAINER_TAG_PATH,
-            filters="name=ml_i&{v_filter}".format(v_filter=self.latest_from_version),
-        ))['results'][0]['tagged_manifest']
-        ml_i_digest = self.client.get(ml_i_href)['digest']
-        ml_ii_href = self.client.get("{unit_path}?{filters}".format(
-            unit_path=CONTAINER_TAG_PATH,
-            filters="name=ml_ii&{v_filter}".format(v_filter=self.latest_from_version),
-        ))['results'][0]['tagged_manifest']
-        ml_ii_digest = self.client.get(ml_ii_href)['digest']
-        self.client.post(
-            self.CONTAINER_MANIFEST_COPY_PATH,
+        ml_i_href = self.tags_api.list(
+            name="ml_i",
+            repository_version=self.latest_from_version
+        ).results[0].tagged_manifest
+        ml_i_digest = self.manifests_api.read(ml_i_href).digest
+        ml_ii_href = self.tags_api.list(
+            name="ml_ii",
+            repository_version=self.latest_from_version
+        ).results[0].tagged_manifest
+        ml_ii_digest = self.manifests_api.read(ml_ii_href).digest
+        copy_response = self.repositories_api.copy_manifests(
+            self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo['pulp_href'],
+                'source_repository': self.from_repo.pulp_href,
                 'digests': [ml_i_digest, ml_ii_digest]
             }
         )
-        latest_to_repo_href = self.client.get(self.to_repo['pulp_href'])['latest_version_href']
-        to_repo_content = self.client.get(latest_to_repo_href)['content_summary']['present']
+        monitor_task(copy_response.task)
+
+        to_repo = self.repositories_api.read(self.to_repo.pulp_href)
+        to_repo_content = self.versions_api.read(
+            to_repo.latest_version_href
+        ).content_summary.present
         self.assertFalse('container.tag' in to_repo_content)
         # each manifest list is a manifest and references 2 other manifests
-        self.assertEqual(to_repo_content['container.manifest']['count'], 6)
+        self.assertEqual(to_repo_content['container.manifest']['count'], '6')
         # each referenced manifest has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], 8)
+        self.assertEqual(to_repo_content['container.blob']['count'], '8')
 
     def test_copy_manifests_by_digest_empty_list(self):
         """Passing an empty list copies no manifests."""
-        self.client.post(
-            self.CONTAINER_MANIFEST_COPY_PATH,
+        self.repositories_api.copy_manifests(
+            self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo['pulp_href'],
+                'source_repository': self.from_repo.pulp_href,
                 'digests': []
             }
         )
-        latest_to_repo_href = self.client.get(self.to_repo['pulp_href'])['latest_version_href']
+        latest_to = self.repositories_api.read(self.to_repo.pulp_href)
         # Assert a new version was not created
-        self.assertEqual(latest_to_repo_href, f"{self.to_repo['pulp_href']}versions/0/")
+        self.assertEqual(latest_to.latest_version_href, f"{self.to_repo.pulp_href}versions/0/")
 
 
+@unittest.skip(
+    "FIXME: plugin writer action required"
+    " container plugin doesn't support push or uploads yet."
+)
 class TestTagCopy(unittest.TestCase):
     """Test recursive copy of tags content to a repository."""
 
@@ -440,6 +510,10 @@ class TestTagCopy(unittest.TestCase):
         )
 
 
+@unittest.skip(
+    "FIXME: plugin writer action required"
+    " container plugin doesn't support push or uploads yet."
+)
 class TestRecursiveAdd(unittest.TestCase):
     """Test recursively adding container content to a repository."""
 
