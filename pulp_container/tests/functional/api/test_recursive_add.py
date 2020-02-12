@@ -1,6 +1,5 @@
 # coding=utf-8
 """Tests that recursively add container content to repositories."""
-import json
 import unittest
 
 from pulp_smash.pulp3.utils import gen_repo
@@ -264,8 +263,7 @@ class TestManifestCopy(unittest.TestCase):
             name="ml_i",
             repository_version=self.latest_from_version
         ).results[0].tagged_manifest
-        response = self.manifests_api.read(ml_i_href, _preload_content=False)
-        ml_i_digest = json.loads(response.data)["digest"]
+        ml_i_digest = self.manifests_api.read(ml_i_href).digest
 
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
@@ -289,15 +287,13 @@ class TestManifestCopy(unittest.TestCase):
             name="ml_i",
             repository_version=self.latest_from_version
         ).results[0].tagged_manifest
-        response = self.manifests_api.read(ml_i_href, _preload_content=False)
-        ml_i_digest = json.loads(response.data)["digest"]
+        ml_i_digest = self.manifests_api.read(ml_i_href).digest
 
         ml_ii_href = self.tags_api.list(
             name="ml_ii",
             repository_version=self.latest_from_version
         ).results[0].tagged_manifest
-        response = self.manifests_api.read(ml_ii_href, _preload_content=False)
-        ml_ii_digest = json.loads(response.data)["digest"]
+        ml_ii_digest = self.manifests_api.read(ml_ii_href).digest
 
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
