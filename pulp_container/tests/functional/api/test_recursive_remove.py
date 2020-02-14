@@ -4,22 +4,20 @@ import unittest
 
 from pulp_smash.pulp3.utils import gen_repo
 
-from pulp_container.tests.functional.constants import (
-    DOCKERHUB_PULP_FIXTURE_1,
-)
 from pulp_container.tests.functional.utils import (
     gen_container_remote,
     gen_container_client,
-    monitor_task
+    monitor_task,
 )
+from pulp_container.tests.functional.constants import DOCKERHUB_PULP_FIXTURE_1
 
 from pulpcore.client.pulp_container import (
     ApiException,
+    ContainerContainerRemote,
+    ContainerContainerRepository,
+    ContentTagsApi,
     RemotesContainerApi,
     RepositoriesContainerApi,
-    ContainerContainerRepository,
-    ContainerContainerRemote,
-    ContentTagsApi,
     RepositoriesContainerVersionsApi,
     RepositorySyncURL,
 )

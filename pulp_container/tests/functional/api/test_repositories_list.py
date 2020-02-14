@@ -6,28 +6,25 @@ from urllib.parse import urljoin
 from requests.exceptions import HTTPError
 
 from pulp_smash import api, config
-from pulp_smash.pulp3.utils import gen_repo, gen_distribution
+from pulp_smash.pulp3.utils import gen_distribution, gen_repo
 
-from pulp_container.tests.functional.utils import set_up_module as setUpModule  # noqa:F401
+from pulp_container.tests.functional.constants import DOCKERHUB_PULP_FIXTURE_1
+
 from pulp_container.tests.functional.utils import (
     gen_container_remote,
     gen_container_client,
     gen_token_signing_keys,
     monitor_task,
-    BearerTokenAuth
-)
-
-from pulp_container.tests.functional.constants import (
-    DOCKERHUB_PULP_FIXTURE_1,
+    BearerTokenAuth,
 )
 
 from pulpcore.client.pulp_container import (
-    RepositoriesContainerApi,
-    DistributionsContainerApi,
     ContainerContainerRepository,
     ContainerContainerDistribution,
-    RemotesContainerApi,
     ContainerContainerRemote,
+    DistributionsContainerApi,
+    RepositoriesContainerApi,
+    RemotesContainerApi,
     RepositorySyncURL,
 )
 

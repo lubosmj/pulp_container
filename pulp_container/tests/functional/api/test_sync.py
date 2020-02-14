@@ -6,21 +6,20 @@ from pulp_smash import cli, config
 from pulp_smash.pulp3.constants import MEDIA_PATH
 from pulp_smash.pulp3.utils import delete_orphans, gen_repo
 
-from pulp_container.tests.functional.constants import DOCKERHUB_PULP_FIXTURE_1
 from pulp_container.tests.functional.utils import (
     gen_container_client,
     gen_container_remote,
     monitor_task,
 )
-from pulp_container.tests.functional.utils import set_up_module as setUpModule  # noqa:F401
+from pulp_container.tests.functional.constants import DOCKERHUB_PULP_FIXTURE_1
 
 from pulpcore.client.pulp_container import (
-    RepositoriesContainerApi,
     ContainerContainerRepository,
+    ContainerContainerRemote,
+    ContentTagsApi,
+    RepositoriesContainerApi,
     RepositorySyncURL,
     RemotesContainerApi,
-    ContentTagsApi,
-    ContainerContainerRemote,
 )
 
 

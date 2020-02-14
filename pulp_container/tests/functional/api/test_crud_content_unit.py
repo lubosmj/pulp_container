@@ -11,8 +11,6 @@ from pulp_container.tests.functional.utils import (
     monitor_task,
     skip_if,
 )
-from pulp_container.tests.functional.utils import set_up_module as setUpModule  # noqa:F401
-
 from pulpcore.client.pulp_container import ContentManifestsApi
 
 

@@ -13,27 +13,26 @@ from pulp_smash.pulp3.utils import (
 )
 
 from pulp_container.tests.functional.utils import (
-    gen_container_remote,
-    get_docker_hub_remote_blobsums,
-    gen_token_signing_keys,
+    core_client,
     gen_container_client,
+    gen_container_remote,
+    gen_token_signing_keys,
+    get_docker_hub_remote_blobsums,
     monitor_task,
-    core_client
 )
-
 from pulp_container.tests.functional.constants import (
     CONTAINER_CONTENT_NAME,
     REPO_UPSTREAM_NAME,
     REPO_UPSTREAM_TAG,
 )
-from pulp_container.tests.functional.utils import set_up_module as setUpModule  # noqa:F401
+
 from pulpcore.client.pulp_container import (
     ContainerContainerDistribution,
+    ContainerContainerRepository,
     DistributionsContainerApi,
     RepositorySyncURL,
     RepositoriesContainerApi,
     RemotesContainerApi,
-    ContainerContainerRepository
 )
 from pulpcore.client.pulpcore import ArtifactsApi
 

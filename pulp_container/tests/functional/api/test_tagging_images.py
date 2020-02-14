@@ -4,30 +4,28 @@ import unittest
 
 from pulp_smash.pulp3.utils import gen_repo
 
-from pulp_container.tests.functional.utils import set_up_module as setUpModule  # noqa:F401
 from pulp_container.tests.functional.utils import (
     gen_container_remote,
     gen_container_client,
-    monitor_task
+    monitor_task,
 )
-
 from pulp_container.tests.functional.constants import (
     CONTAINER_TAG_PATH,
     DOCKERHUB_PULP_FIXTURE_1,
 )
 
 from pulpcore.client.pulp_container import (
+    ApiException,
+    ContainerContainerRemote,
+    ContainerContainerRepository,
+    ContentManifestsApi,
+    ContentTagsApi,
     RepositoriesContainerApi,
     RepositoriesContainerVersionsApi,
     RepositorySyncURL,
-    ContainerContainerRepository,
     RemotesContainerApi,
-    ContainerContainerRemote,
-    ContentTagsApi,
-    ContentManifestsApi,
-    ApiException,
-    UnTagImage,
     TagImage,
+    UnTagImage,
 )
 
 

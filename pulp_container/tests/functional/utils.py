@@ -13,8 +13,6 @@ from pulp_smash.pulp3.utils import (
     gen_remote,
     gen_repo,
     get_content,
-    require_pulp_3,
-    require_pulp_plugins,
 )
 
 from pulp_container.tests.functional.constants import (
@@ -41,12 +39,6 @@ configuration = Configuration()
 configuration.username = "admin"
 configuration.password = "password"
 configuration.safe_chars_for_path_param = "/"
-
-
-def set_up_module():
-    """Skip tests Pulp 3 isn't under test or if pulp_container isn't installed."""
-    require_pulp_3(SkipTest)
-    require_pulp_plugins({"pulp_container"}, SkipTest)
 
 
 def gen_container_client():
