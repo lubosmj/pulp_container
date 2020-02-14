@@ -150,9 +150,10 @@ class CRUDContainerDistributionsTestCase(unittest.TestCase):
     @skip_if(bool, "distribution", False)
     def test_05_delete(self):
         """Delete a distribution."""
-        self.distribution_api.delete(self.distribution['pulp_href'])
+        delete_response = self.distribution_api.delete(self.distribution["pulp_href"])
+        monitor_task(delete_response.task)
         with self.assertRaises(ApiException):
-            self.distribution_api.read(self.distribution['pulp_href'])
+            self.distribution_api.read(self.distribution["pulp_href"])
 
     def test_negative_create_distribution_with_invalid_parameter(self):
         """Attempt to create distribution passing invalid parameter.
