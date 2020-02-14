@@ -5,17 +5,30 @@ import unittest
 from urllib.parse import urljoin
 from requests.exceptions import HTTPError
 
-from pulp_smash import api, config, cli
-from pulp_smash.pulp3.utils import gen_repo, sync, gen_distribution
+from pulp_smash import api, config
+from pulp_smash.pulp3.utils import gen_repo, gen_distribution
 
 from pulp_container.tests.functional.utils import set_up_module as setUpModule  # noqa:F401
-from pulp_container.tests.functional.utils import gen_container_remote, BearerTokenAuth
+from pulp_container.tests.functional.utils import (
+    gen_container_remote,
+    gen_container_client,
+    generate_token_signing_keys,
+    monitor_task,
+    BearerTokenAuth
+)
 
 from pulp_container.tests.functional.constants import (
-    CONTAINER_DISTRIBUTION_PATH,
-    CONTAINER_REMOTE_PATH,
-    CONTAINER_REPO_PATH,
     DOCKERHUB_PULP_FIXTURE_1,
+)
+
+from pulpcore.client.pulp_container import (
+    RepositoriesContainerApi,
+    DistributionsContainerApi,
+    ContainerContainerRepository,
+    ContainerContainerDistribution,
+    RemotesContainerApi,
+    ContainerContainerRemote,
+    RepositorySyncURL,
 )
 
 
@@ -25,38 +38,46 @@ class RepositoriesListTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Create class wide-variables."""
+        api_client = gen_container_client()
+        cls.repositories_api = RepositoriesContainerApi(api_client)
+        cls.remotes_api = RemotesContainerApi(api_client)
+        cls.distributions_api = DistributionsContainerApi(api_client)
+
         cls.cfg = config.get_config()
+        generate_token_signing_keys(cls.cfg)
         cls.client = api.Client(cls.cfg, api.json_handler)
 
-        token_auth = cls.cfg.hosts[0].roles['token auth']
-        client = cli.Client(cls.cfg)
-        client.run('openssl ecparam -genkey -name prime256v1 -noout -out {}'
-                   .format(token_auth['private key']).split())
-        client.run('openssl ec -in {} -pubout -out {}'.format(
-            token_auth['private key'], token_auth['public key']).split())
+        cls.repository = cls.repositories_api.create(ContainerContainerRepository(**gen_repo()))
 
-        cls.repository = cls.client.post(CONTAINER_REPO_PATH, gen_repo())
         remote_data = gen_container_remote(upstream_name=DOCKERHUB_PULP_FIXTURE_1)
-        cls.remote = cls.client.post(CONTAINER_REMOTE_PATH, remote_data)
-        sync(cls.cfg, cls.remote, cls.repository)
+        cls.remote = cls.remotes_api.create(ContainerContainerRemote(**remote_data))
 
-        cls.distribution1 = cls.client.using_handler(api.task_handler).post(
-            CONTAINER_DISTRIBUTION_PATH,
-            gen_distribution(repository=cls.repository['pulp_href'])
+        sync_data = RepositorySyncURL(remote=cls.remote.pulp_href)
+        sync_response = cls.repositories_api.sync(cls.repository.pulp_href, sync_data)
+        monitor_task(sync_response.task)
+
+        distribution_data = gen_distribution(repository=cls.repository.pulp_href)
+        distribution_response = cls.distributions_api.create(
+            ContainerContainerDistribution(**distribution_data)
         )
-        cls.distribution2 = cls.client.using_handler(api.task_handler).post(
-            CONTAINER_DISTRIBUTION_PATH,
-            gen_distribution(repository=cls.repository['pulp_href'])
+        created_resources = monitor_task(distribution_response.task)
+        cls.distribution1 = cls.distributions_api.read(created_resources[0])
+
+        distribution_data = gen_distribution(repository=cls.repository.pulp_href)
+        distribution_response = cls.distributions_api.create(
+            ContainerContainerDistribution(**distribution_data)
         )
+        created_resources = monitor_task(distribution_response.task)
+        cls.distribution2 = cls.distributions_api.read(created_resources[0])
 
     @classmethod
     def tearDownClass(cls):
         """Clean generated resources."""
-        cls.client.delete(cls.repository['pulp_href'])
-        cls.client.delete(cls.remote['pulp_href'])
+        cls.repositories_api.delete(cls.repository.pulp_href)
+        cls.remotes_api.delete(cls.remote.pulp_href)
 
-        cls.client.delete(cls.distribution1['pulp_href'])
-        cls.client.delete(cls.distribution2['pulp_href'])
+        cls.distributions_api.delete(cls.distribution1.pulp_href)
+        cls.distributions_api.delete(cls.distribution2.pulp_href)
 
     def test_listing_repositories(self):
         """
@@ -80,7 +101,7 @@ class RepositoriesListTestCase(unittest.TestCase):
             auth=BearerTokenAuth(content_response['token'])
         )
 
-        repositories_names = [self.distribution1['base_path'], self.distribution2['base_path']]
+        repositories_names = [self.distribution1.base_path, self.distribution2.base_path]
         self.assertEqual(repositories, {'repositories': repositories_names})
 
 
