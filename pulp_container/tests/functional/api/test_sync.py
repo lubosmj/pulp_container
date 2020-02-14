@@ -19,7 +19,8 @@ from pulpcore.client.pulp_container import (
     ContainerContainerRepository,
     RepositorySyncURL,
     RemotesContainerApi,
-    ContentTagsApi
+    ContentTagsApi,
+    ContainerContainerRemote,
 )
 
 
@@ -129,7 +130,8 @@ class SyncInvalidURLTestCase(unittest.TestCase):
         self.addCleanup(repository_api.delete, repository.pulp_href)
 
         remote_api = RemotesContainerApi(client_api)
-        remote = remote_api.create(gen_container_remote(url="http://i-am-an-invalid-url.com/invalid/"))
+        remote_data = gen_container_remote(url="http://i-am-an-invalid-url.com/invalid/")
+        remote = remote_api.create(ContainerContainerRemote(**remote_data))
         self.addCleanup(remote_api.delete, remote.pulp_href)
 
         repository_sync_data = RepositorySyncURL(remote=remote.pulp_href)

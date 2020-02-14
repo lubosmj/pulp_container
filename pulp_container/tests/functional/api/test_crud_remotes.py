@@ -214,6 +214,6 @@ def _gen_verbose_remote():
         {
             "password": utils.uuid4(), "username": utils.uuid4(),
             "policy": choice(ON_DEMAND_DOWNLOAD_POLICIES)
-         }
+        }
     )
     return attrs

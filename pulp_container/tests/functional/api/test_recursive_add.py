@@ -511,7 +511,7 @@ class TestTagCopy(unittest.TestCase):
         tag_response = self.repositories_api.tag(self.to_repo.pulp_href, params)
         monitor_task(tag_response.task)
         # Copy tags again from the original repo
-        copy_respone = self.repositories_api.copy_tags(
+        copy_response = self.repositories_api.copy_tags(
             self.to_repo.pulp_href,
             {
                 'source_repository': self.from_repo.pulp_href,

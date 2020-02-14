@@ -9,7 +9,7 @@ from pulp_smash import utils
 from pulp_smash.pulp3.utils import gen_distribution
 
 from pulp_container.tests.functional.utils import set_up_module as setUpModule  # noqa:F401
-from pulp_container.tests.functional.utils import skip_if, gen_container_client, monitor_task, configuration
+from pulp_container.tests.functional.utils import skip_if, gen_container_client, monitor_task
 
 from pulpcore.client.pulp_container import (
     DistributionsContainerApi,

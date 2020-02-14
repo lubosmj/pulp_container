@@ -8,7 +8,7 @@ from unittest import SkipTest
 from time import sleep
 from tempfile import NamedTemporaryFile
 
-from pulp_smash import selectors, cli, config
+from pulp_smash import selectors, cli
 from pulp_smash.pulp3.utils import (
     gen_remote,
     gen_repo,
