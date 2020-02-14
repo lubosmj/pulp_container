@@ -84,22 +84,22 @@ class RepositoriesListTestCase(unittest.TestCase):
         caught an exception for the HTTP 401 response at first. Then, the token is retrieved
         from the token server and is used for requesting the list of repositories again.
         """
-        repositories_list_endpoint = urljoin(self.cfg.get_content_host_base_url(), '/v2/_catalog')
+        repositories_list_endpoint = urljoin(self.cfg.get_content_host_base_url(), "/v2/_catalog")
 
         with self.assertRaises(HTTPError) as cm:
             self.client.get(repositories_list_endpoint)
         content_response = cm.exception.response
-        authenticate_header = content_response.headers['Www-Authenticate']
+        authenticate_header = content_response.headers["Www-Authenticate"]
 
         queries = AuthenticationHeaderQueries(authenticate_header)
-        content_response = self.client.get(queries.realm, params={'service': queries.service})
+        content_response = self.client.get(queries.realm, params={"service": queries.service})
         repositories = self.client.get(
             repositories_list_endpoint,
-            auth=BearerTokenAuth(content_response['token'])
+            auth=BearerTokenAuth(content_response["token"])
         )
 
         repositories_names = [self.distribution1.base_path, self.distribution2.base_path]
-        self.assertEqual(repositories, {'repositories': repositories_names})
+        self.assertEqual(repositories, {"repositories": repositories_names})
 
 
 class AuthenticationHeaderQueries:

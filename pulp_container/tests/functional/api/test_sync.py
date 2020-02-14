@@ -138,7 +138,7 @@ class SyncInvalidURLTestCase(unittest.TestCase):
 
         task = monitor_task(sync_response.task)
         if isinstance(task, dict):
-            self.assertIsNotNone(task['error']['description'])
+            self.assertIsNotNone(task["error"]["description"])
         else:
             self.assertFalse("Sync with an invalid remote URL was successful")
 

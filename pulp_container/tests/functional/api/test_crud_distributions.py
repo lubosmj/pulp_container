@@ -199,18 +199,18 @@ class DistributionBasePathTestCase(unittest.TestCase):
 
     def test_spaces(self):
         """Test that spaces can not be part of ``base_path``."""
-        self.try_create_distribution(base_path=utils.uuid4().replace('-', ' '))
-        self.try_update_distribution(base_path=utils.uuid4().replace('-', ' '))
+        self.try_create_distribution(base_path=utils.uuid4().replace("-", " "))
+        self.try_update_distribution(base_path=utils.uuid4().replace("-", " "))
 
     def test_begin_slash(self):
         """Test that slash cannot be in the begin of ``base_path``."""
-        self.try_create_distribution(base_path='/' + utils.uuid4())
-        self.try_update_distribution(base_path='/' + utils.uuid4())
+        self.try_create_distribution(base_path="/" + utils.uuid4())
+        self.try_update_distribution(base_path="/" + utils.uuid4())
 
     def test_end_slash(self):
         """Test that slash cannot be in the end of ``base_path``."""
-        self.try_create_distribution(base_path=utils.uuid4() + '/')
-        self.try_update_distribution(base_path=utils.uuid4() + '/')
+        self.try_create_distribution(base_path=utils.uuid4() + "/")
+        self.try_update_distribution(base_path=utils.uuid4() + "/")
 
     def test_unique_base_path(self):
         """Test that ``base_path`` can not be duplicated."""

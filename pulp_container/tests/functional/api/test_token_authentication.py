@@ -84,27 +84,27 @@ class TokenAuthenticationTestCase(unittest.TestCase):
         Bearer token. The generated Bearer token is afterwards used to pull the image.
         All requests are sent via aiohttp modules.
         """
-        image_path = '/v2/{}/manifests/{}'.format(self.distribution.base_path, 'manifest_a')
+        image_path = "/v2/{}/manifests/{}".format(self.distribution.base_path, "manifest_a")
         latest_image_url = urljoin(self.cfg.get_content_host_base_url(), image_path)
 
         with self.assertRaises(HTTPError) as cm:
-            self.client.get(latest_image_url, headers={'Accept': MEDIA_TYPE.MANIFEST_V2})
+            self.client.get(latest_image_url, headers={"Accept": MEDIA_TYPE.MANIFEST_V2})
 
         content_response = cm.exception.response
         self.assertEqual(content_response.status_code, 401)
 
-        authenticate_header = content_response.headers['Www-Authenticate']
+        authenticate_header = content_response.headers["Www-Authenticate"]
         queries = AuthenticationHeaderQueries(authenticate_header)
         content_response = self.client.get(
             queries.realm,
-            params={'service': queries.service, 'scope': queries.scope}
+            params={"service": queries.service, "scope": queries.scope}
         )
         content_response = self.client.get(
             latest_image_url,
-            auth=BearerTokenAuth(content_response['token']),
-            headers={'Accept': MEDIA_TYPE.MANIFEST_V2}
+            auth=BearerTokenAuth(content_response["token"]),
+            headers={"Accept": MEDIA_TYPE.MANIFEST_V2}
         )
-        self.compare_config_blob_digests(content_response['config']['digest'])
+        self.compare_config_blob_digests(content_response["config"]["digest"])
 
     def test_pull_image_with_real_container_client(self):
         """
@@ -114,13 +114,13 @@ class TokenAuthenticationTestCase(unittest.TestCase):
         image from a secured registry.
         """
         registry = cli.RegistryClient(self.cfg)
-        registry.raise_if_unsupported(unittest.SkipTest, 'Test requires podman/docker')
+        registry.raise_if_unsupported(unittest.SkipTest, "Test requires podman/docker")
 
         image_url = urljoin(
             self.cfg.get_content_host_base_url(),
             self.distribution.base_path
         )
-        image_with_tag = f'{image_url}:manifest_a'
+        image_with_tag = f"{image_url}:manifest_a"
         registry.pull(image_with_tag)
 
         image = registry.inspect(image_with_tag)
@@ -130,24 +130,24 @@ class TokenAuthenticationTestCase(unittest.TestCase):
         # 'Id': 'd21d863f69b5de1a973a41344488f2ec89a625f2624195f51b4e2d54a97fc53b' (podman)
         # As long as the output differs in this manner, it is necessary to prepend the string
         # 'sha256:' to the fetched digest.
-        image_id = image[0]['Id']
-        if image_id.startswith('sha256:'):
+        image_id = image[0]["Id"]
+        if image_id.startswith("sha256:"):
             image_digest = image_id
         else:
-            image_digest = 'sha256:' + image_id
+            image_digest = "sha256:" + image_id
 
         self.compare_config_blob_digests(image_digest)
 
     def compare_config_blob_digests(self, pulled_manifest_digest):
         """Check if a valid config was pulled from a registry."""
-        tags_by_name_url = f'{CONTAINER_TAG_PATH}?name=manifest_a'
+        tags_by_name_url = f"{CONTAINER_TAG_PATH}?name=manifest_a"
         tag_response = self.client.get(tags_by_name_url)
 
-        tagged_manifest_href = tag_response[0]['tagged_manifest']
+        tagged_manifest_href = tag_response[0]["tagged_manifest"]
         manifest_response = self.client.get(tagged_manifest_href)
 
-        config_blob_response = self.client.get(manifest_response['config_blob'])
-        self.assertEqual(pulled_manifest_digest, config_blob_response['digest'])
+        config_blob_response = self.client.get(manifest_response["config_blob"])
+        self.assertEqual(pulled_manifest_digest, config_blob_response["digest"])
 
 
 class AuthenticationHeaderQueries:
@@ -155,7 +155,7 @@ class AuthenticationHeaderQueries:
 
     def __init__(self, authenticate_header):
         """Extract service, realm, and scope from the header."""
-        realm, service, scope = authenticate_header[7:].split(',')
+        realm, service, scope = authenticate_header[7:].split(",")
         # realm="rlm" -> rlm
         self.realm = realm[6:][1:-1]
         # service="srv" -> srv

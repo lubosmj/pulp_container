@@ -83,7 +83,7 @@ class TestManifestCopy(unittest.TestCase):
                 self.to_repo.pulp_href,
                 {
                     # to_repo has no versions, use it as source
-                    'source_repository': self.to_repo.pulp_href,
+                    "source_repository": self.to_repo.pulp_href,
                 }
             )
         self.assertEqual(context.exception.status, 400)
@@ -94,8 +94,8 @@ class TestManifestCopy(unittest.TestCase):
             self.repositories_api.copy_manifests(
                 self.to_repo.pulp_href,
                 {
-                    'source_repository': self.from_repo.pulp_href,
-                    'source_repository_version': self.from_repo.latest_version_href,
+                    "source_repository": self.from_repo.pulp_href,
+                    "source_repository_version": self.from_repo.latest_version_href,
                 }
             )
         self.assertEqual(context.exception.status, 400)
@@ -105,7 +105,7 @@ class TestManifestCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
+                "source_repository": self.from_repo.pulp_href,
             }
         )
         monitor_task(copy_response.task)
@@ -118,13 +118,13 @@ class TestManifestCopy(unittest.TestCase):
         from_repo_content = self.versions_api.read(
             latest_from.latest_version_href
         ).content_summary.present
-        for container_type in ['container.manifest', 'container.blob']:
+        for container_type in ["container.manifest", "container.blob"]:
             self.assertEqual(
-                to_repo_content[container_type]['count'],
-                from_repo_content[container_type]['count'],
+                to_repo_content[container_type]["count"],
+                from_repo_content[container_type]["count"],
                 msg=container_type,
             )
-        self.assertFalse('container.tag' in to_repo_content)
+        self.assertFalse("container.tag" in to_repo_content)
 
     def test_copy_all_manifests_from_version(self):
         """Passing only source version copies all manifests."""
@@ -132,7 +132,7 @@ class TestManifestCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
             {
-                'source_repository_version': latest_from.latest_version_href,
+                "source_repository_version": latest_from.latest_version_href,
             }
         )
         monitor_task(copy_response.task)
@@ -144,12 +144,12 @@ class TestManifestCopy(unittest.TestCase):
         from_repo_content = self.versions_api.read(
             latest_from.latest_version_href
         ).content_summary.present
-        for container_type in ['container.manifest', 'container.blob']:
+        for container_type in ["container.manifest", "container.blob"]:
             self.assertEqual(
-                to_repo_content[container_type]['count'],
-                from_repo_content[container_type]['count']
+                to_repo_content[container_type]["count"],
+                from_repo_content[container_type]["count"]
             )
-        self.assertFalse('container.tag' in to_repo_content)
+        self.assertFalse("container.tag" in to_repo_content)
 
     def test_copy_manifest_by_digest(self):
         """Specify a single manifest by digest to copy."""
@@ -161,8 +161,8 @@ class TestManifestCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
-                'digests': [manifest_a_digest]
+                "source_repository": self.from_repo.pulp_href,
+                "digests": [manifest_a_digest]
             }
         )
         monitor_task(copy_response.task)
@@ -171,10 +171,10 @@ class TestManifestCopy(unittest.TestCase):
         to_repo_content = self.versions_api.read(
             to_repo.latest_version_href
         ).content_summary.present
-        self.assertFalse('container.tag' in to_repo_content)
-        self.assertEqual(to_repo_content['container.manifest']['count'], '1')
+        self.assertFalse("container.tag" in to_repo_content)
+        self.assertEqual(to_repo_content["container.manifest"]["count"], "1")
         # manifest_a has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], '2')
+        self.assertEqual(to_repo_content["container.blob"]["count"], "2")
 
     def test_copy_manifest_by_digest_and_media_type(self):
         """Specify a single manifest by digest to copy."""
@@ -186,9 +186,9 @@ class TestManifestCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
-                'digests': [manifest_a_digest],
-                'media_types': [MEDIA_TYPE.MANIFEST_V2]
+                "source_repository": self.from_repo.pulp_href,
+                "digests": [manifest_a_digest],
+                "media_types": [MEDIA_TYPE.MANIFEST_V2]
             }
         )
         monitor_task(copy_response.task)
@@ -197,18 +197,18 @@ class TestManifestCopy(unittest.TestCase):
         to_repo_content = self.versions_api.read(
             to_repo.latest_version_href
         ).content_summary.present
-        self.assertFalse('container.tag' in to_repo_content)
-        self.assertEqual(to_repo_content['container.manifest']['count'], '1')
+        self.assertFalse("container.tag" in to_repo_content)
+        self.assertEqual(to_repo_content["container.manifest"]["count"], "1")
         # manifest_a has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], '2')
+        self.assertEqual(to_repo_content["container.blob"]["count"], "2")
 
     def test_copy_all_manifest_lists_by_media_type(self):
         """Specify the media_type, to copy all manifest lists."""
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
-                'media_types': [MEDIA_TYPE.MANIFEST_LIST]
+                "source_repository": self.from_repo.pulp_href,
+                "media_types": [MEDIA_TYPE.MANIFEST_LIST]
             }
         )
         monitor_task(copy_response.task)
@@ -217,19 +217,19 @@ class TestManifestCopy(unittest.TestCase):
         to_repo_content = self.versions_api.read(
             to_repo.latest_version_href
         ).content_summary.present
-        self.assertFalse('container.tag' in to_repo_content)
+        self.assertFalse("container.tag" in to_repo_content)
         # Fixture has 4 manifest lists, which combined reference 5 manifests
-        self.assertEqual(to_repo_content['container.manifest']['count'], '9')
+        self.assertEqual(to_repo_content["container.manifest"]["count"], "9")
         # each manifest (non-list) has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], '10')
+        self.assertEqual(to_repo_content["container.blob"]["count"], "10")
 
     def test_copy_all_manifests_by_media_type(self):
         """Specify the media_type, to copy all manifest lists."""
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
-                'media_types': [MEDIA_TYPE.MANIFEST_V1, MEDIA_TYPE.MANIFEST_V2]
+                "source_repository": self.from_repo.pulp_href,
+                "media_types": [MEDIA_TYPE.MANIFEST_V1, MEDIA_TYPE.MANIFEST_V2]
             }
         )
         monitor_task(copy_response.task)
@@ -238,11 +238,11 @@ class TestManifestCopy(unittest.TestCase):
         to_repo_content = self.versions_api.read(
             to_repo.latest_version_href
         ).content_summary.present
-        self.assertFalse('container.tag' in to_repo_content)
+        self.assertFalse("container.tag" in to_repo_content)
         # Fixture has 5 manifests that aren't manifest lists
-        self.assertEqual(to_repo_content['container.manifest']['count'], '5')
+        self.assertEqual(to_repo_content["container.manifest"]["count"], "5")
         # each manifest (non-list) has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], '10')
+        self.assertEqual(to_repo_content["container.blob"]["count"], "10")
 
     def test_fail_to_copy_invalid_manifest_media_type(self):
         """Specify the media_type, to copy all manifest lists."""
@@ -250,8 +250,8 @@ class TestManifestCopy(unittest.TestCase):
             self.repositories_api.copy_manifests(
                 self.to_repo.pulp_href,
                 {
-                    'source_repository': self.from_repo.pulp_href,
-                    'media_types': ['wrongwrongwrong']
+                    "source_repository": self.from_repo.pulp_href,
+                    "media_types": ["wrongwrongwrong"]
                 }
             )
         self.assertEqual(context.exception.status, 400)
@@ -267,9 +267,9 @@ class TestManifestCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
-                'digests': [ml_i_digest],
-                'media_types': [MEDIA_TYPE.MANIFEST_V2]
+                "source_repository": self.from_repo.pulp_href,
+                "digests": [ml_i_digest],
+                "media_types": [MEDIA_TYPE.MANIFEST_V2]
             }
         )
         monitor_task(copy_response.task)
@@ -297,8 +297,8 @@ class TestManifestCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
-                'digests': [ml_i_digest, ml_ii_digest]
+                "source_repository": self.from_repo.pulp_href,
+                "digests": [ml_i_digest, ml_ii_digest]
             }
         )
         monitor_task(copy_response.task)
@@ -307,19 +307,19 @@ class TestManifestCopy(unittest.TestCase):
         to_repo_content = self.versions_api.read(
             to_repo.latest_version_href
         ).content_summary.present
-        self.assertFalse('container.tag' in to_repo_content)
+        self.assertFalse("container.tag" in to_repo_content)
         # each manifest list is a manifest and references 2 other manifests
-        self.assertEqual(to_repo_content['container.manifest']['count'], '6')
+        self.assertEqual(to_repo_content["container.manifest"]["count"], "6")
         # each referenced manifest has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], '8')
+        self.assertEqual(to_repo_content["container.blob"]["count"], "8")
 
     def test_copy_manifests_by_digest_empty_list(self):
         """Passing an empty list copies no manifests."""
         self.repositories_api.copy_manifests(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
-                'digests': []
+                "source_repository": self.from_repo.pulp_href,
+                "digests": []
             }
         )
         latest_to = self.repositories_api.read(self.to_repo.pulp_href)
@@ -379,7 +379,7 @@ class TestTagCopy(unittest.TestCase):
                 self.to_repo.pulp_href,
                 {
                     # to_repo has no versions, use it as source
-                    'source_repository': self.to_repo.pulp_href,
+                    "source_repository": self.to_repo.pulp_href,
                 }
             )
 
@@ -389,8 +389,8 @@ class TestTagCopy(unittest.TestCase):
             self.repositories_api.copy_tags(
                 self.to_repo.pulp_href,
                 {
-                    'source_repository': self.from_repo.pulp_href,
-                    'source_repository_version': self.from_repo.latest_version_href,
+                    "source_repository": self.from_repo.pulp_href,
+                    "source_repository_version": self.from_repo.latest_version_href,
                 }
             )
         self.assertEqual(context.exception.status, 400)
@@ -400,7 +400,7 @@ class TestTagCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_tags(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
+                "source_repository": self.from_repo.pulp_href,
             }
         )
         monitor_task(copy_response.task)
@@ -413,10 +413,10 @@ class TestTagCopy(unittest.TestCase):
         from_repo_content = self.versions_api.read(
             from_repo.latest_version_href
         ).content_summary.present
-        for container_type in ['container.tag', 'container.manifest', 'container.blob']:
+        for container_type in ["container.tag", "container.manifest", "container.blob"]:
             self.assertEqual(
-                to_repo_content[container_type]['count'],
-                from_repo_content[container_type]['count'],
+                to_repo_content[container_type]["count"],
+                from_repo_content[container_type]["count"],
                 msg=container_type,
             )
 
@@ -428,7 +428,7 @@ class TestTagCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_tags(
             self.to_repo.pulp_href,
             {
-                'source_repository_version': latest_from_repo_href,
+                "source_repository_version": latest_from_repo_href,
             }
         )
         monitor_task(copy_response.task)
@@ -440,10 +440,10 @@ class TestTagCopy(unittest.TestCase):
         from_repo_content = self.versions_api.read(
             latest_from_repo_href
         ).content_summary.present
-        for container_type in ['container.tag', 'container.manifest', 'container.blob']:
+        for container_type in ["container.tag", "container.manifest", "container.blob"]:
             self.assertEqual(
-                to_repo_content[container_type]['count'],
-                from_repo_content[container_type]['count'],
+                to_repo_content[container_type]["count"],
+                from_repo_content[container_type]["count"],
                 msg=container_type,
             )
 
@@ -452,8 +452,8 @@ class TestTagCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_tags(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
-                'names': ['ml_i', 'manifest_c']
+                "source_repository": self.from_repo.pulp_href,
+                "names": ["ml_i", "manifest_c"]
             }
         )
         monitor_task(copy_response.task)
@@ -462,19 +462,19 @@ class TestTagCopy(unittest.TestCase):
         to_repo_content = self.versions_api.read(
             to_repo.latest_version_href
         ).content_summary.present
-        self.assertEqual(to_repo_content['container.tag']['count'], '2')
+        self.assertEqual(to_repo_content["container.tag"]["count"], "2")
         # ml_i has 1 manifest list, 2 manifests, manifest_c has 1 manifest
-        self.assertEqual(to_repo_content['container.manifest']['count'], '4')
+        self.assertEqual(to_repo_content["container.manifest"]["count"], "4")
         # each manifest (not manifest list) has 2 blobs
-        self.assertEqual(to_repo_content['container.blob']['count'], '6')
+        self.assertEqual(to_repo_content["container.blob"]["count"], "6")
 
     def test_copy_tags_by_name_empty_list(self):
         """Passing an empty list of names copies nothing."""
         copy_response = self.repositories_api.copy_tags(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
-                'names': []
+                "source_repository": self.from_repo.pulp_href,
+                "names": []
             }
         )
         monitor_task(copy_response.task)
@@ -490,7 +490,7 @@ class TestTagCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_tags(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
+                "source_repository": self.from_repo.pulp_href,
             }
         )
         monitor_task(copy_response.task)
@@ -504,8 +504,8 @@ class TestTagCopy(unittest.TestCase):
         ).results[0].tagged_manifest
         manifest_b = self.manifests_api.read(manifest_b_href)
         params = {
-            'tag': 'manifest_a',
-            'digest': manifest_b.digest
+            "tag": "manifest_a",
+            "digest": manifest_b.digest
         }
         tag_response = self.repositories_api.tag(self.to_repo.pulp_href, params)
         monitor_task(tag_response.task)
@@ -513,7 +513,7 @@ class TestTagCopy(unittest.TestCase):
         copy_response = self.repositories_api.copy_tags(
             self.to_repo.pulp_href,
             {
-                'source_repository': self.from_repo.pulp_href,
+                "source_repository": self.from_repo.pulp_href,
             }
         )
         monitor_task(copy_response.task)
@@ -525,20 +525,14 @@ class TestTagCopy(unittest.TestCase):
         from_repo_content = self.versions_api.read(
             from_repo.latest_version_href
         ).content_summary
-        for container_type in ['container.tag', 'container.manifest', 'container.blob']:
+        for container_type in ["container.tag", "container.manifest", "container.blob"]:
             self.assertEqual(
-                to_repo_content.present[container_type]['count'],
-                from_repo_content.present[container_type]['count']
+                to_repo_content.present[container_type]["count"],
+                from_repo_content.present[container_type]["count"]
             )
 
-        self.assertEqual(
-            to_repo_content.added['container.tag']['count'],
-            '1'
-        )
-        self.assertEqual(
-            to_repo_content.removed['container.tag']['count'],
-            '1'
-        )
+        self.assertEqual(to_repo_content.added["container.tag"]["count"], "1")
+        self.assertEqual(to_repo_content.removed["container.tag"]["count"], "1")
 
 
 class TestRecursiveAdd(unittest.TestCase):
@@ -597,7 +591,7 @@ class TestRecursiveAdd(unittest.TestCase):
         ).results[0].tagged_manifest
         add_response = self.repositories_api.add(
             self.to_repo.pulp_href,
-            {'content_units': [manifest_a]})
+            {"content_units": [manifest_a]})
         monitor_task(add_response.task)
         latest_version_href = self.repositories_api.read(
             self.to_repo.pulp_href
@@ -605,11 +599,11 @@ class TestRecursiveAdd(unittest.TestCase):
         latest = self.versions_api.read(latest_version_href)
 
         # No tags added
-        self.assertFalse('container.manifest-tag' in latest.content_summary.added)
+        self.assertFalse("container.manifest-tag" in latest.content_summary.added)
 
         # manifest a has 2 blobs
-        self.assertEqual(latest.content_summary.added['container.manifest']['count'], '1')
-        self.assertEqual(latest.content_summary.added['container.blob']['count'], '2')
+        self.assertEqual(latest.content_summary.added["container.manifest"]["count"], "1")
+        self.assertEqual(latest.content_summary.added["container.blob"]["count"], "2")
 
     def test_manifest_list_recursion(self):
         """Add a Manifest List, related manifests, and related blobs."""
@@ -619,7 +613,7 @@ class TestRecursiveAdd(unittest.TestCase):
         ).results[0].tagged_manifest
         add_response = self.repositories_api.add(
             self.to_repo.pulp_href,
-            {'content_units': [ml_i]})
+            {"content_units": [ml_i]})
         monitor_task(add_response.task)
 
         latest_version_href = self.repositories_api.read(
@@ -628,9 +622,9 @@ class TestRecursiveAdd(unittest.TestCase):
         latest = self.versions_api.read(latest_version_href)
 
         # No tags added
-        self.assertFalse('container.tag' in latest.content_summary.added)
+        self.assertFalse("container.tag" in latest.content_summary.added)
         # 1 manifest list 2 manifests
-        self.assertEqual(latest.content_summary.added['container.manifest']['count'], '3')
+        self.assertEqual(latest.content_summary.added["container.manifest"]["count"], "3")
 
     def test_tagged_manifest_list_recursion(self):
         """Add a tagged manifest list, and its related manifests and blobs."""
@@ -640,16 +634,16 @@ class TestRecursiveAdd(unittest.TestCase):
         ).results[0].pulp_href
         add_response = self.repositories_api.add(
             self.to_repo.pulp_href,
-            {'content_units': [ml_i_tag]})
+            {"content_units": [ml_i_tag]})
         monitor_task(add_response.task)
         latest_version_href = self.repositories_api.read(
             self.to_repo.pulp_href
         ).latest_version_href
         latest = self.versions_api.read(latest_version_href)
-        self.assertEqual(latest.content_summary.added['container.tag']['count'], '1')
+        self.assertEqual(latest.content_summary.added["container.tag"]["count"], "1")
         # 1 manifest list 2 manifests
-        self.assertEqual(latest.content_summary.added['container.manifest']['count'], '3')
-        self.assertEqual(latest.content_summary.added['container.blob']['count'], '4')
+        self.assertEqual(latest.content_summary.added["container.manifest"]["count"], "3")
+        self.assertEqual(latest.content_summary.added["container.blob"]["count"], "4")
 
     def test_tagged_manifest_recursion(self):
         """Add a tagged manifest and its related blobs."""
@@ -659,16 +653,16 @@ class TestRecursiveAdd(unittest.TestCase):
         ).results[0].pulp_href
         add_response = self.repositories_api.add(
             self.to_repo.pulp_href,
-            {'content_units': [manifest_a_tag]})
+            {"content_units": [manifest_a_tag]})
         monitor_task(add_response.task)
         latest_version_href = self.repositories_api.read(
             self.to_repo.pulp_href
         ).latest_version_href
         latest = self.versions_api.read(latest_version_href)
 
-        self.assertEqual(latest.content_summary.added['container.tag']['count'], '1')
-        self.assertEqual(latest.content_summary.added['container.manifest']['count'], '1')
-        self.assertEqual(latest.content_summary.added['container.blob']['count'], '2')
+        self.assertEqual(latest.content_summary.added["container.tag"]["count"], "1")
+        self.assertEqual(latest.content_summary.added["container.manifest"]["count"], "1")
+        self.assertEqual(latest.content_summary.added["container.blob"]["count"], "2")
 
     def test_tag_replacement(self):
         """Add a tagged manifest to a repo with a tag of that name already in place."""
@@ -685,12 +679,12 @@ class TestRecursiveAdd(unittest.TestCase):
         manifest_b_digest = self.manifests_api.read(manifest_b).digest
         add_response = self.repositories_api.add(
             self.to_repo.pulp_href,
-            {'content_units': [manifest_b]})
+            {"content_units": [manifest_b]})
         monitor_task(add_response.task)
         # Tag manifest_b as `manifest_a`
         params = {
-            'tag': "manifest_a",
-            'digest': manifest_b_digest
+            "tag": "manifest_a",
+            "digest": manifest_b_digest
         }
         self.repositories_api.tag(self.to_repo.pulp_href, params)
 
@@ -698,17 +692,17 @@ class TestRecursiveAdd(unittest.TestCase):
         # new manifest_a tag, but leave the tagged manifest (manifest_b)
         add_response = self.repositories_api.add(
             self.to_repo.pulp_href,
-            {'content_units': [manifest_a_tag]})
+            {"content_units": [manifest_a_tag]})
         monitor_task(add_response.task)
 
         latest_version_href = self.repositories_api.read(
             self.to_repo.pulp_href
         ).latest_version_href
         latest = self.versions_api.read(latest_version_href)
-        self.assertEqual(latest.content_summary.added['container.tag']['count'], '1')
-        self.assertEqual(latest.content_summary.removed['container.tag']['count'], '1')
-        self.assertFalse('container.manifest' in latest.content_summary.removed)
-        self.assertFalse('container.blob' in latest.content_summary.removed)
+        self.assertEqual(latest.content_summary.added["container.tag"]["count"], "1")
+        self.assertEqual(latest.content_summary.removed["container.tag"]["count"], "1")
+        self.assertFalse("container.manifest" in latest.content_summary.removed)
+        self.assertFalse("container.blob" in latest.content_summary.removed)
 
     def test_many_tagged_manifest_lists(self):
         """Add several Manifest List, related manifests, and related blobs."""
@@ -731,7 +725,7 @@ class TestRecursiveAdd(unittest.TestCase):
         add_response = self.repositories_api.add(
             self.to_repo.pulp_href,
             {
-                'content_units': [ml_i_tag, ml_ii_tag, ml_iii_tag, ml_iv_tag]
+                "content_units": [ml_i_tag, ml_ii_tag, ml_iii_tag, ml_iv_tag]
             }
         )
         monitor_task(add_response.task)
@@ -741,6 +735,6 @@ class TestRecursiveAdd(unittest.TestCase):
         ).latest_version_href
         latest = self.versions_api.read(latest_version_href)
 
-        self.assertEqual(latest.content_summary.added['container.tag']['count'], '4')
-        self.assertEqual(latest.content_summary.added['container.manifest']['count'], '9')
-        self.assertEqual(latest.content_summary.added['container.blob']['count'], '10')
+        self.assertEqual(latest.content_summary.added["container.tag"]["count"], "4")
+        self.assertEqual(latest.content_summary.added["container.manifest"]["count"], "9")
+        self.assertEqual(latest.content_summary.added["container.blob"]["count"], "10")
