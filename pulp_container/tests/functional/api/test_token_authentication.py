@@ -12,7 +12,7 @@ from pulp_container.tests.functional.utils import set_up_module as setUpModule  
 from pulp_container.tests.functional.utils import (
     gen_container_remote,
     gen_container_client,
-    generate_token_signing_keys,
+    gen_token_signing_keys,
     monitor_task,
     BearerTokenAuth
 )
@@ -47,7 +47,7 @@ class TokenAuthenticationTestCase(unittest.TestCase):
     def setUpClass(cls):
         """Create class wide-variables."""
         cls.cfg = config.get_config()
-        generate_token_signing_keys(cls.cfg)
+        gen_token_signing_keys(cls.cfg)
         cls.client = api.Client(cls.cfg, api.page_handler)
 
         api_client = gen_container_client()

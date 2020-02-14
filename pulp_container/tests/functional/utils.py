@@ -128,7 +128,7 @@ def populate_pulp(url=REGISTRY_V2_FEED_URL):
     return created_resources
 
 
-def generate_token_signing_keys(cfg):
+def gen_token_signing_keys(cfg):
     """Generate a private and public key in a place specified by the configuration.
 
     A registry uses the generated keys to create a trustful signature allowing users to pull

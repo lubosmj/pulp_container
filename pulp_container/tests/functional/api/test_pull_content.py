@@ -15,7 +15,7 @@ from pulp_smash.pulp3.utils import (
 from pulp_container.tests.functional.utils import (
     gen_container_remote,
     get_docker_hub_remote_blobsums,
-    generate_token_signing_keys,
+    gen_token_signing_keys,
     gen_container_client,
     monitor_task,
     core_client
@@ -56,7 +56,7 @@ class PullContentTestCase(unittest.TestCase):
         * `Pulp #4460 <https://pulp.plan.io/issues/4460>`_
         """
         cls.cfg = config.get_config()
-        generate_token_signing_keys(cls.cfg)
+        gen_token_signing_keys(cls.cfg)
 
         client_api = gen_container_client()
         cls.repositories_api = RepositoriesContainerApi(client_api)
@@ -277,7 +277,7 @@ class PullOnDemandContentTestCase(unittest.TestCase):
         * `Pulp #4460 <https://pulp.plan.io/issues/4460>`_
         """
         cls.cfg = config.get_config()
-        generate_token_signing_keys(cls.cfg)
+        gen_token_signing_keys(cls.cfg)
 
         client_api = gen_container_client()
         cls.repositories_api = RepositoriesContainerApi(client_api)
