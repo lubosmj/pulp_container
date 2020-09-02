@@ -428,7 +428,7 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
                 chunk_size = end - start + 1
 
         upload = get_object_or_404(models.Upload, repository=repository, pk=pk)
-        blob_upload = models.BlobTemporaryUpload(upload=upload)
+        blob_upload = models.UploadChunk(upload=upload)
         blob_upload.save_chunk(chunk, chunk_size=chunk_size)
 
         if blob_upload.offset != start:
@@ -449,7 +449,7 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
         digest = request.query_params["digest"]
         upload = models.Upload.objects.get(pk=pk, repository=repository)
 
-        chunks = models.BlobTemporaryUpload.objects.filter(upload=upload).order_by("offset")
+        chunks = models.UploadChunk.objects.filter(upload=upload).order_by("offset")
         chunks_files = map(lambda chunk: chunk.file, chunks)
 
         with NamedTemporaryFile("ab") as temp_file:

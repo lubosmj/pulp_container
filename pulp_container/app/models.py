@@ -376,7 +376,7 @@ class Upload(BaseModel):
     cumulative_size = models.BigIntegerField(default=0)
 
 
-class BlobTemporaryUpload(PulpTemporaryFile):
+class UploadChunk(PulpTemporaryFile):
     """
     A model used for storing uploaded blob chunks in a temporary file.
     """
