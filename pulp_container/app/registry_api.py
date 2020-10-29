@@ -106,9 +106,9 @@ class ManifestNotFound(NotFound):
         )
 
 
-class ManifestRenderer(BaseRenderer):
+class ContentRenderer(BaseRenderer):
     """
-    Rendered class for rendering Manifest responses.
+    Rendered class for rendering Manifest and Blob responses.
     """
 
     media_type = "*/*"
@@ -516,6 +516,8 @@ class Blobs(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
     ViewSet for interacting with Blobs
     """
 
+    renderer_classes = [ContentRenderer]
+
     def head(self, request, path, pk=None):
         """
         Responds to HEAD requests about blobs
@@ -541,10 +543,10 @@ class Blobs(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
 
 class Manifests(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
     """
-    ViewSet for intereacting with Manifests
+    ViewSet for interacting with Manifests
     """
 
-    renderer_classes = [ManifestRenderer]
+    renderer_classes = [ContentRenderer]
     # The lookup regex does not allow /, ^, &, *, %, !, ~, @, #, +, =, ?
     lookup_value_regex = "[^/^&*%!~@#+=?]+"
 
