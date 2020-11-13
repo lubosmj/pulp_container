@@ -11,11 +11,12 @@ import re
 from tempfile import NamedTemporaryFile
 
 from django.core.files.storage import default_storage as storage
+from django.core.files import File
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.conf import settings
 
-from pulpcore.plugin.models import Artifact, ContentArtifact
+from pulpcore.plugin.models import Artifact, ContentArtifact, UploadChunk
 from rest_framework.exceptions import (
     AuthenticationFailed,
     NotAuthenticated,
@@ -392,7 +393,7 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
         """
         _, repository = self.get_dr_push(request, path, create=True)
 
-        upload = models.Upload(repository=repository)
+        upload = models.Upload(repository=repository, size=0)
         upload.save()
 
         response = UploadResponse(
@@ -414,13 +415,11 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
 
         if whole:
             start = 0
-            end = chunk.size - 1
         else:
             content_range = request.META.get("HTTP_CONTENT_RANGE", "")
             match = self.content_range_pattern.match(content_range)
             if not match:
                 start = 0
-                end = 0
                 chunk_size = 0
             else:
                 start = int(match.group("start"))
@@ -428,19 +427,39 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
                 chunk_size = end - start + 1
 
         upload = get_object_or_404(models.Upload, repository=repository, pk=pk)
-        blob_upload = models.UploadChunk(upload=upload)
-        blob_upload.save_chunk(chunk, chunk_size=chunk_size)
 
-        if blob_upload.offset != start:
-            raise Exception
+        with NamedTemporaryFile("ab") as temp_file:
+            while True:
+                subchunk = chunk.read(2000000)
+                if not subchunk:
+                    break
+                temp_file.write(subchunk)
+            temp_file.flush()
+
+            chunk = File(open(temp_file.name, "rb"))
+            self._append_chunk(upload, chunk, chunk_size, start)
 
         return UploadResponse(
             upload=upload,
             path=path,
-            offset=blob_upload.file.size,
-            content_length=blob_upload.file.size,
+            offset=chunk.size,
+            content_length=chunk.size,
             request=request,
         )
+
+    def _append_chunk(self, upload, chunk, chunk_size, start):
+        with transaction.atomic():
+            upload.append(chunk, upload.size)
+
+            if chunk_size is not None:
+                upload.size += chunk_size
+            else:
+                upload.size += chunk.size
+
+            if upload.size != start:
+                raise Exception
+
+            upload.save()
 
     def put(self, request, path, pk=None):
         """Handles creation of Uploads."""
@@ -449,7 +468,7 @@ class BlobUploads(ContainerRegistryApiMixin, ViewSet):
         digest = request.query_params["digest"]
         upload = models.Upload.objects.get(pk=pk, repository=repository)
 
-        chunks = models.UploadChunk.objects.filter(upload=upload).order_by("offset")
+        chunks = UploadChunk.objects.filter(upload=upload).order_by("offset")
         chunks_files = map(lambda chunk: chunk.file, chunks)
 
         with NamedTemporaryFile("ab") as temp_file:

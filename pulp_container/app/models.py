@@ -4,13 +4,11 @@ import re
 import time
 
 from logging import getLogger
-from tempfile import NamedTemporaryFile
 from url_normalize import url_normalize
 from urllib.parse import urlparse
 
-from django.db import models, transaction
+from django.db import models
 from django.contrib.postgres import fields
-from django.core.files import File
 from django.shortcuts import redirect
 
 from pulpcore.plugin.download import DownloaderFactory
@@ -18,10 +16,10 @@ from pulpcore.plugin.models import (
     BaseModel,
     Content,
     ContentGuard,
-    PulpTemporaryFile,
     Remote,
     Repository,
     RepositoryVersionDistribution,
+    Upload,
 )
 from pulpcore.plugin.repo_version_utils import remove_duplicates, validate_repo_version
 
@@ -385,54 +383,12 @@ def generate_filename(instance, filename):
     return time.strftime(filename)
 
 
-class Upload(BaseModel):
+class Upload(Upload):
     """
     A model for tracking Blob uploads.
     """
 
     repository = models.ForeignKey(Repository, related_name="uploads", on_delete=models.CASCADE)
-    cumulative_size = models.BigIntegerField(default=0)
-
-
-class UploadChunk(PulpTemporaryFile):
-    """
-    A model used for storing uploaded blob chunks in a temporary file.
-    """
-
-    upload = models.ForeignKey(Upload, related_name="blob_uploads", on_delete=models.CASCADE)
-    offset = models.BigIntegerField(default=0)
-
-    def save_chunk(self, chunk, chunk_size=None):
-        """Save the passed chunk to a temporary file and update offset for a current upload."""
-        self._init_temporary_file(chunk)
-        self._update_upload_size(chunk, chunk_size)
-        self._save_data()
-
-    def _init_temporary_file(self, chunk):
-        with NamedTemporaryFile("ab") as temp_file:
-            while True:
-                subchunk = chunk.read(2000000)
-                if not subchunk:
-                    break
-                temp_file.write(subchunk)
-
-            temp_file.flush()
-
-            self.file = File(open(temp_file.name, "rb"))
-            self.offset = self.upload.cumulative_size
-
-    def _update_upload_size(self, chunk, chunk_size):
-        if chunk_size is not None:
-            self.upload.cumulative_size += chunk_size
-        elif hasattr(chunk, "size"):
-            self.upload.cumulative_size += chunk.size
-        else:
-            self.upload.cumulative_size += self.file.size
-
-    def _save_data(self):
-        with transaction.atomic():
-            self.upload.save()
-            self.save()
 
 
 def _gen_secret():
