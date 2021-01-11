@@ -23,7 +23,7 @@ from pulpcore.plugin.viewsets import (
     CharInFilter,
     ContentFilter,
     ContentGuardViewSet,
-    # TODO: DistributionFilter,
+    DistributionFilter,
     ImmutableRepositoryViewSet,
     NamedModelViewSet,
     ReadOnlyContentViewSet,
@@ -87,8 +87,7 @@ class BlobFilter(ContentFilter):
         }
 
 
-# TODO: class ContainerDistributionFilter(DistributionFilter):
-class ContainerDistributionFilter(BaseDistributionViewSet.filterset_class):
+class ContainerDistributionFilter(DistributionFilter):
     """
     FilterSet for ContainerDistributions
     """
