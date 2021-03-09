@@ -8,6 +8,7 @@ import json
 import logging
 import hashlib
 import re
+from collections import namedtuple
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from tempfile import NamedTemporaryFile
 
@@ -39,6 +40,7 @@ from rest_framework.viewsets import ViewSet
 from rest_framework.views import APIView
 
 from pulp_container.app import models, serializers
+from pulp_container.app.access_policy import RegistryAccessPolicy
 from pulp_container.app.authorization import AuthorizationService
 from pulp_container.app.redirects import FileStorageRedirects, S3StorageRedirects
 from pulp_container.app.token_verification import (
@@ -48,6 +50,7 @@ from pulp_container.app.token_verification import (
     TokenPermission,
 )
 
+FakeView = namedtuple("FakeView", ["action", "get_object"])
 
 log = logging.getLogger(__name__)
 
@@ -449,6 +452,19 @@ class CatalogView(ContainerRegistryApiMixin, ListAPIView):
     queryset = models.ContainerDistribution.objects.all().only("base_path")
     serializer_class = ContainerCatalogSerializer
     pagination_class = ContainerCatalogPagination
+    access_policy_class = RegistryAccessPolicy()
+
+    def get_queryset(self, *args, **kwargs):
+        """Filter the queryset based on assigned permissions."""
+        queryset = super().get_queryset()
+
+        accessible_repo_pks = []
+        for obj in queryset:
+            view = FakeView("pull", lambda: obj)
+            if self.access_policy_class.has_permission(self.request, view):
+                accessible_repo_pks.append(obj.pk)
+
+        return queryset.filter(pk__in=accessible_repo_pks)
 
 
 class ContainerTagListSerializer(ModelSerializer):
