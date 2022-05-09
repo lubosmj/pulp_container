@@ -1,7 +1,16 @@
+import pydevd_pycharm
 from import_export import fields, widgets
 from pulpcore.plugin.importexport import QueryModelResource, BaseContentResource
+from pulpcore.plugin.modelresources import RepositoryResource
 
-from pulp_container.app.models import Blob, Manifest, ManifestListManifest, ManifestSignature, Tag
+from pulp_container.app.models import (
+    Blob,
+    Manifest,
+    ManifestListManifest,
+    ManifestSignature,
+    Tag,
+    ContainerRepository,
+)
 
 
 class BlobResource(BaseContentResource):
@@ -122,10 +131,19 @@ class TagResource(BaseContentResource):
         import_id_fields = model.natural_key_fields()
 
 
+class ContainerRepositoryResource(RepositoryResource):
+    """TODO."""
+
+    class Meta:
+        model = ContainerRepository
+        exclude = RepositoryResource.Meta.exclude + ("repository_ptr",)
+
+
 IMPORT_ORDER = [
     BlobResource,
     ManifestResource,
     ManifestListManifestResource,
     ManifestSignatureResource,
     TagResource,
+    ContainerRepositoryResource,
 ]
