@@ -11,13 +11,15 @@ import logging
 import hashlib
 import re
 
+from aiohttp.client_exceptions import ClientResponseError
 from itertools import chain
-from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 from tempfile import NamedTemporaryFile
 
 from django.core.files.storage import default_storage as storage
 from django.core.files.base import ContentFile, File
 from django.db import IntegrityError, transaction
+from django.db.models import F, Value
 from django.shortcuts import get_object_or_404
 
 from django.conf import settings
@@ -84,6 +86,7 @@ from pulp_container.constants import (
     SIGNATURE_HEADER,
     SIGNATURE_PAYLOAD_MAX_SIZE,
     SIGNATURE_TYPE,
+    V2_ACCEPT_HEADERS,
 )
 
 log = logging.getLogger(__name__)
@@ -233,7 +236,7 @@ class ContainerRegistryApiMixin:
 
     def get_exception_handler_context(self):
         """
-        Adjust the reder context for exceptions.
+        Adjust the render context for exceptions.
         """
         context = super().get_exception_handler_context()
         if context["request"]:
@@ -271,7 +274,8 @@ class ContainerRegistryApiMixin:
         try:
             distribution = models.ContainerDistribution.objects.get(base_path=path)
         except models.ContainerDistribution.DoesNotExist:
-            raise RepositoryNotFound(name=path)
+            # get a pull-through cache distribution whose base_path is a substring of the path
+            return self.get_pull_through_drv(path)
         if distribution.repository:
             repository_version = distribution.repository.latest_version()
         elif distribution.repository_version:
@@ -279,6 +283,44 @@ class ContainerRegistryApiMixin:
         else:
             raise RepositoryNotFound(name=path)
         return distribution, distribution.repository, repository_version
+
+    def get_pull_through_drv(self, path):
+        root_cache_distribution = (
+            models.ContainerPullThroughDistribution.objects.annotate(path=Value(path))
+            .filter(path__startswith=F("base_path"))
+            .order_by("-base_path")
+            .first()
+        )
+        if not root_cache_distribution:
+            raise RepositoryNotFound(name=path)
+
+        try:
+            with transaction.atomic():
+                cache_repository, _ = models.ContainerRepository.objects.get_or_create(
+                    name=path, retain_repo_versions=1
+                )
+
+                upstream_name = path.split(root_cache_distribution.base_path, maxsplit=1)[1]
+                cache_remote, _ = models.ContainerRemote.objects.get_or_create(
+                    name=path,
+                    upstream_name=upstream_name.strip("/"),
+                    url=root_cache_distribution.remote.url,
+                )
+
+                cache_distribution, _ = models.ContainerDistribution.objects.get_or_create(
+                    name=path,
+                    base_path=path,
+                    remote=cache_remote,
+                    repository=cache_repository,
+                )
+        except IntegrityError:
+            # some entities needed to be created, but their keys already exist in the database
+            # (e.g., a repository with the same name as the constructed path)
+            raise RepositoryNotFound(name=path)
+        else:
+            root_cache_distribution.distributions.add(cache_distribution)
+
+        return cache_distribution, cache_repository, cache_repository.latest_version()
 
     def get_dr_push(self, request, path, create=False):
         """
@@ -951,13 +993,30 @@ class Manifests(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
             try:
                 tag = models.Tag.objects.get(name=pk, pk__in=repository_version.content)
             except models.Tag.DoesNotExist:
-                raise ManifestNotFound(reference=pk)
+                if distribution.remote:
+                    remote = distribution.remote.cast()
+                    repository = distribution.repository.cast()
+                    manifest = self.fetch_manifest(remote, repository_version, repository, pk)
+                    if manifest is None:
+                        return redirects.redirect_to_content_app("manifests", pk)
+
+                    tag = models.Tag(name=pk, tagged_manifest=manifest)
+                    try:
+                        tag.save()
+                    except IntegrityError:
+                        tag = models.Tag.objects.get(name=tag.name, tagged_manifest=manifest)
+                        tag.touch()
+
+                    return redirects.redirect_to_content_app("manifests", tag.name)
+                else:
+                    raise ManifestNotFound(reference=pk)
 
             return redirects.issue_tag_redirect(tag)
         else:
             try:
                 manifest = models.Manifest.objects.get(digest=pk, pk__in=repository_version.content)
-            except models.Manifest.DoesNotExit:
+            except models.Manifest.DoesNotExist:
+                repository = repository.cast()
                 if repository.PUSH_ENABLED:
                     # the manifest might be a part of listed manifests currently being uploaded
                     try:
@@ -966,9 +1025,48 @@ class Manifests(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
                     except models.Manifest.DoesNotExist:
                         raise ManifestNotFound(reference=pk)
                 else:
-                    ManifestNotFound(reference=pk)
+                    if distribution.remote:
+                        remote = distribution.remote.cast()
+                        manifest = self.fetch_manifest(remote, repository_version, repository, pk)
+                        if manifest is None:
+                            return redirects.redirect_to_content_app("manifests", pk)
+
+                        raise ManifestNotFound(reference=pk)
+                    else:
+                        raise ManifestNotFound(reference=pk)
 
             return redirects.issue_manifest_redirect(manifest)
+
+    def fetch_manifest(self, remote, repository, repository_version, pk):
+        relative_url = "/v2/{name}/manifests/{pk}".format(
+            name=remote.namespaced_upstream_name, pk=pk
+        )
+        tag_url = urljoin(remote.url, relative_url)
+        downloader = remote.get_in_memory_downloader(url=tag_url)
+        try:
+            response = downloader.fetch(
+                extra_data={"headers": V2_ACCEPT_HEADERS, "http_method": "head"}
+            )
+        except ClientResponseError as response_error:
+            try:
+                return models.Manifest.objects.get(digest=pk, pk__in=repository_version.content)
+            except models.Manifest.DoesNotExist:
+                try:
+                    manifest = repository.pending_manifests.get(digest=pk)
+                    manifest.touch()
+                    return manifest
+                except models.Manifest.DoesNotExist:
+                    pass
+
+            if response_error.status == 429:
+                # the client could request the manifest outside the docker hub pull limit;
+                # it is necessary to pass this information back to the client
+                raise Throttled()
+            else:
+                raise ManifestNotFound(reference=pk)
+        else:
+            digest = response.headers.get("docker-content-digest")
+            return models.Manifest.objects.filter(digest=digest).first()
 
     def put(self, request, path, pk=None):
         """
@@ -1207,12 +1305,17 @@ class Signatures(ContainerRegistryApiMixin, ViewSet):
 
     def get(self, request, path, pk):
         """Return a signature identified by its sha256 checksum."""
-        _, _, repository_version = self.get_drv_pull(path)
+        _, repository, repository_version = self.get_drv_pull(path)
 
         try:
             manifest = models.Manifest.objects.get(digest=pk, pk__in=repository_version.content)
         except models.Manifest.DoesNotExist:
-            raise ManifestNotFound(reference=pk)
+            repository = repository.cast()
+            try:
+                manifest = repository.pending_manifests.get(digest=pk)
+                manifest.touch()
+            except models.Manifest.DoesNotExist:
+                raise ManifestNotFound(reference=pk)
 
         signatures = models.ManifestSignature.objects.filter(
             signed_manifest=manifest, pk__in=repository_version.content

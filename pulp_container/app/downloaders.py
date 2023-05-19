@@ -5,6 +5,7 @@ import ssl
 import re
 
 from aiohttp.client_exceptions import ClientResponseError
+from collections import namedtuple
 from logging import getLogger
 from multidict import MultiDict
 from urllib import parse
@@ -15,6 +16,8 @@ from pulp_container.constants import V2_ACCEPT_HEADERS
 
 log = getLogger(__name__)
 
+InMemoryDownloadResult = namedtuple("InMemoryDownloadResult", ["data", "headers", "status_code"])
+
 
 class RegistryAuthHttpDownloader(HttpDownloader):
     """
@@ -24,13 +27,14 @@ class RegistryAuthHttpDownloader(HttpDownloader):
     """
 
     registry_auth = {"bearer": None, "basic": None}
-    token_lock = asyncio.Lock()
 
     def __init__(self, *args, **kwargs):
         """
         Initialize the downloader.
         """
         self.remote = kwargs.pop("remote")
+        self.token_lock = asyncio.Lock()
+
         super().__init__(*args, **kwargs)
 
     async def _run(self, handle_401=True, extra_data=None):
@@ -172,6 +176,16 @@ class RegistryAuthHttpDownloader(HttpDownloader):
         elif basic_auth is not None:
             return {"Authorization": basic_auth}
         return {}
+
+
+class InMemoryDownloader(RegistryAuthHttpDownloader):
+    """A downloader class suited for downloading data in-memory."""
+
+    async def _handle_response(self, response):
+        data = await response.text()
+        return InMemoryDownloadResult(
+            data=data, headers=response.headers, status_code=response.status
+        )
 
 
 class NoAuthSignatureDownloader(HttpDownloader):

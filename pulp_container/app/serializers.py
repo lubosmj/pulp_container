@@ -277,6 +277,22 @@ class ContainerRemoteSerializer(RemoteSerializer):
         model = models.ContainerRemote
 
 
+class ContainerPullThroughRemoteSerializer(RemoteSerializer):
+    """
+    A serializer for a remote used in the pull-through distribution.
+    """
+
+    policy = serializers.ChoiceField(
+        help_text="The policy always mimics the on_demand behaviour when performing pull-through.",
+        choices=((models.Remote.ON_DEMAND, "When syncing, download just the metadata.")),
+        default=models.Remote.ON_DEMAND,
+    )
+
+    class Meta:
+        fields = RemoteSerializer.Meta.fields
+        model = models.ContainerPullThroughRemote
+
+
 class ContainerDistributionSerializer(DistributionSerializer, GetOrCreateSerializerMixin):
     """
     A serializer for ContainerDistribution.
@@ -309,10 +325,16 @@ class ContainerDistributionSerializer(DistributionSerializer, GetOrCreateSeriali
     repository_version = RepositoryVersionRelatedField(
         required=False, help_text=_("RepositoryVersion to be served"), allow_null=True
     )
+    remote = DetailRelatedField(
+        required=False,
+        help_text=_("Remote that can be used to fetch content when using pull-through caching."),
+        view_name_pattern=r"remotes(-.*/.*)?-detail",
+        queryset=models.ContainerRemote.objects.all(),
+    )
 
     def validate(self, data):
         """
-        Validate the ContainterDistribution.
+        Validate the ContainerDistribution.
 
         Make sure there is an instance of ContentRedirectContentGuard always present in validated
         data.
@@ -360,10 +382,34 @@ class ContainerDistributionSerializer(DistributionSerializer, GetOrCreateSeriali
         fields = tuple(set(DistributionSerializer.Meta.fields) - {"base_url"}) + (
             "repository_version",
             "registry_path",
+            "remote",
             "namespace",
             "private",
             "description",
         )
+
+
+class ContainerPullThroughDistributionSerializer(DistributionSerializer):
+    """
+    A serializer for a specialized pull-through distribution referencing sub-distributions.
+    """
+
+    remote = DetailRelatedField(
+        help_text=_("Remote that can be used to fetch content when using pull-through caching."),
+        view_name_pattern=r"remotes(-.*/.*)-detail",
+        queryset=models.ContainerPullThroughRemote.objects.all(),
+    )
+    distributions = DetailRelatedField(
+        many=True,
+        help_text="Distributions created after pulling content through cache",
+        view_name="distributions-detail",
+        queryset=models.ContainerDistribution.objects.all(),
+        required=False,
+    )
+
+    class Meta:
+        model = models.ContainerPullThroughDistribution
+        fields = DistributionSerializer.Meta.fields + ("remote", "distributions")
 
 
 class TagOperationSerializer(ValidateFieldsMixin, serializers.Serializer):

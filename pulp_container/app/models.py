@@ -334,6 +334,33 @@ class ContainerRemote(Remote, AutoAddObjPermsMixin):
             )
             return self._noauth_download_factory
 
+    @property
+    def in_memory_download_factory(self):
+        """
+        A Downloader Factory that stores downloaded data in-memory.
+
+        This downloader should be used in workflows where the size of downloaded content is
+        reasonably small. For instance, for downloading manifests or manifest lists.
+
+        Upon first access, the InMemoryDownloaderFactory is instantiated and saved internally.
+
+        Returns:
+            DownloadFactory: The instantiated InMemoryDownloaderFactory to be used by
+                get_in_memory_downloader().
+
+        """
+        try:
+            return self._in_memory_download_factory
+        except AttributeError:
+            self._in_memory_download_factory = DownloaderFactory(
+                self,
+                downloader_overrides={
+                    "http": downloaders.InMemoryDownloader,
+                    "https": downloaders.InMemoryDownloader,
+                },
+            )
+            return self._in_memory_download_factory
+
     def get_downloader(self, remote_artifact=None, url=None, **kwargs):
         """
         Get a downloader from either a RemoteArtifact or URL that is configured with this Remote.
@@ -388,6 +415,36 @@ class ContainerRemote(Remote, AutoAddObjPermsMixin):
             **kwargs,
         )
 
+    def get_in_memory_downloader(self, remote_artifact=None, url=None, **kwargs):
+        """
+        Get an in-memory downloader from either a RemoteArtifact or URL that is provided.
+
+        This method accepts either `remote_artifact` or `url` but not both. At least one is
+        required. If neither of both are passed a ValueError is raised.
+
+        Args:
+            remote_artifact (:class:`~pulpcore.app.models.RemoteArtifact`): The RemoteArtifact to
+                download.
+            url (str): The URL to download.
+            kwargs (dict): This accepts the parameters of
+                :class:`~pulpcore.plugin.download.BaseDownloader`.
+
+        Raises:
+            ValueError: If neither remote_artifact and url are passed, or if both are passed.
+
+        Returns:
+            subclass of :class:`~pulpcore.plugin.download.BaseDownloader`: A downloader that
+            is configured with the remote settings.
+
+        """
+        kwargs["remote"] = self
+        return super().get_downloader(
+            remote_artifact=remote_artifact,
+            url=url,
+            download_factory=self.in_memory_download_factory,
+            **kwargs,
+        )
+
     @property
     def namespaced_upstream_name(self):
         """
@@ -409,6 +466,72 @@ class ContainerRemote(Remote, AutoAddObjPermsMixin):
             (
                 "manage_roles_containerremote",
                 "Can manage role assignments on container remote",
+            ),
+        ]
+
+
+class ContainerPullThroughRemote(Remote, AutoAddObjPermsMixin):
+    """
+    A remote for pull-through caching, omitting the requirement for the upstream name.
+    """
+
+    TYPE = "pull-through"
+
+    @property
+    def download_factory(self):
+        """
+        Downloader Factory that maps to custom downloaders which support registry auth.
+
+        Upon first access, the DownloaderFactory is instantiated and saved internally.
+
+        Returns:
+            DownloadFactory: The instantiated DownloaderFactory to be used by
+                get_downloader()
+
+        """
+        try:
+            return self._download_factory
+        except AttributeError:
+            self._download_factory = DownloaderFactory(
+                self,
+                downloader_overrides={
+                    "http": downloaders.RegistryAuthHttpDownloader,
+                    "https": downloaders.RegistryAuthHttpDownloader,
+                },
+            )
+            return self._download_factory
+
+    def get_downloader(self, remote_artifact=None, url=None, **kwargs):
+        """
+        Get a downloader from either a RemoteArtifact or URL that is configured with this Remote.
+
+        This method accepts either `remote_artifact` or `url` but not both. At least one is
+        required. If neither or both are passed a ValueError is raised.
+
+        Args:
+            remote_artifact (:class:`~pulpcore.app.models.RemoteArtifact`): The RemoteArtifact to
+                download.
+            url (str): The URL to download.
+            kwargs (dict): This accepts the parameters of
+                :class:`~pulpcore.plugin.download.BaseDownloader`.
+
+        Raises:
+            ValueError: If neither remote_artifact and url are passed, or if both are passed.
+
+        Returns:
+            subclass of :class:`~pulpcore.plugin.download.BaseDownloader`: A downloader that
+            is configured with the remote settings.
+
+        """
+        kwargs["remote"] = self
+        return super().get_downloader(remote_artifact=remote_artifact, url=url, **kwargs)
+
+    class Meta:
+        default_related_name = "%(app_label)s_%(model_name)s"
+        permissions = [
+            (
+                "manage_roles_containerpullthroughremote",
+                "Can manage role assignments on pull-through container remote",
             ),
         ]
 
@@ -565,6 +688,23 @@ class ContainerPushRepository(Repository, AutoAddObjPermsMixin):
         self.pending_manifests.remove(*Manifest.objects.filter(pk__in=added_content))
 
 
+class ContainerPullThroughDistribution(Distribution, AutoAddObjPermsMixin):
+    """
+    A distribution for pull-through caching, referencing normal distributions.
+    """
+
+    TYPE = "pull-through"
+
+    class Meta:
+        default_related_name = "%(app_label)s_%(model_name)s"
+        permissions = [
+            (
+                "manage_roles_containerpullthroughdistribution",
+                "Can manage role assignments on pull-through cache distribution",
+            ),
+        ]
+
+
 class ContainerDistribution(Distribution, AutoAddObjPermsMixin):
     """
     A container distribution defines how a repository version is distributed by Pulp's webserver.
@@ -594,6 +734,13 @@ class ContainerDistribution(Distribution, AutoAddObjPermsMixin):
         ),
     )
     description = models.TextField(null=True)
+
+    pull_through_distribution = models.ForeignKey(
+        ContainerPullThroughDistribution,
+        related_name="distributions",
+        on_delete=models.CASCADE,
+        null=True,
+    )
 
     def get_repository_version(self):
         """

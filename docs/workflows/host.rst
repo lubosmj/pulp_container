@@ -117,3 +117,38 @@ Docker Output::
     In general, the automatic conversion cannot be performed when the content is not available
     in the storage. Therefore, it may be successful only if the content was previously synced
     with the ``immediate`` policy.
+
+
+Pull-Through Caching
+--------------------
+
+The Pull-Through Caching feature offers an alternative way to host content by leveraging a **remote
+registry** as the source of truth. This eliminates the need for repository synchronization, reducing
+storage overhead, and ensuring up-to-date images. Pulp acts as a **caching proxy** and stores images
+in a local repository.
+
+Administering the caching::
+
+    # initialize a pull-through remote (the concept of upstream-name is not applicable here)
+    REMOTE_HREF=$(http ${BASE_ADDR}/pulp/api/v3/remotes/container/pull-through/ name=docker-cache url=https://registry-1.docker.io | jq -r ".pulp_href")
+
+    # create a specialized distribution linked to the initialized remote
+    http ${BASE_ADDR}/pulp/api/v3/distributions/container/pull-through/ remote=${REMOTE_HREF} name=docker-cache base_path=docker-cache
+
+Downloading content::
+
+    podman pull localhost:24817/docker-cache/library/busybox
+
+In the example above, the image "busybox" is pulled from the "docker-cache" distribution, acting as
+a transparent caching layer.
+
+By incorporating the Pull-Through Caching feature, administrators can **reduce external network
+dependencies**, and ensure a more reliable and responsive container deployment system in production
+environments.
+
+.. note::
+    Pulp creates repositories that maintain a single repository version for user-pulled images.
+    Thus, only the latest repository version is retained. For instance, when pulling "debian:10,"
+    a "debian" repository with the "10" tag is established. Subsequent pulls such as "debian:11"
+    result in a new repository version that incorporates both tags while removing the previous
+    version. Repositories and their content remain manageable through standard API endpoints.

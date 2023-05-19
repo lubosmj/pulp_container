@@ -1,22 +1,35 @@
+import time
+import json
 import logging
 import os
 
 from asgiref.sync import sync_to_async
 
+from urllib.parse import urljoin
+
 from aiohttp import web
+from aiohttp.web_exceptions import HTTPTooManyRequests
+from django_guid import set_guid
+from django_guid.utils import generate_guid
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from multidict import MultiDict
 
 from pulpcore.plugin.content import Handler, PathNotResolved
-from pulpcore.plugin.models import Content, ContentArtifact
+from pulpcore.plugin.models import Content, ContentArtifact, Task
 from pulpcore.plugin.content import ArtifactResponse
+from pulpcore.plugin.tasking import dispatch
 
 from pulp_container.app.cache import RegistryContentCache
 from pulp_container.app.models import ContainerDistribution, Tag, Blob
 from pulp_container.app.schema_convert import Schema2toSchema1ConverterWrapper
-from pulp_container.app.utils import get_accepted_media_types
-from pulp_container.constants import BLOB_CONTENT_TYPE, EMPTY_BLOB, MEDIA_TYPE
+from pulp_container.app.tasks import download_image_data
+from pulp_container.app.utils import (
+    calculate_digest,
+    get_accepted_media_types,
+    determine_media_type,
+)
+from pulp_container.constants import BLOB_CONTENT_TYPE, EMPTY_BLOB, MEDIA_TYPE, V2_ACCEPT_HEADERS
 
 log = logging.getLogger(__name__)
 
@@ -117,7 +130,67 @@ class Registry(Handler):
                 pk__in=await sync_to_async(repository_version.get_content)(), name=tag_name
             )
         except ObjectDoesNotExist:
-            raise PathNotResolved(tag_name)
+            if distribution.remote:
+                remote = await distribution.remote.acast()
+
+                relative_url = "/v2/{name}/manifests/{tag}".format(
+                    name=remote.namespaced_upstream_name, tag=tag_name
+                )
+                tag_url = urljoin(remote.url, relative_url)
+                downloader = remote.get_in_memory_downloader(url=tag_url)
+                response = await downloader.run(extra_data={"headers": V2_ACCEPT_HEADERS})
+
+                set_guid(generate_guid())
+                task = await sync_to_async(dispatch)(
+                    download_image_data,
+                    exclusive_resources=[repository_version.repository],
+                    kwargs={
+                        "repository_pk": repository_version.repository.pk,
+                        "remote_pk": remote.pk,
+                        "tag_name": tag_name,
+                        "response_data": response.data,
+                    },
+                )
+
+                # waiting shortly for the task to be completed since a container client could
+                # request related content (i.e., manifests and blobs) and halt the pull operation
+                # if the content was not immediately served
+                for dummy in range(3):
+                    time.sleep(1)
+                    task = await Task.objects.aget(pk=task.pk)
+                    if task.state == "completed":
+                        await task.adelete()
+                        break
+                    elif task.state in ["waiting", "running"]:
+                        continue
+                    else:
+                        error = task.error
+                        await task.adelete()
+                        raise Exception(str(error))
+                else:
+                    raise HTTPTooManyRequests()
+
+                try:
+                    manifest_data = json.loads(response.data)
+                except json.decoder.JSONDecodeError:
+                    raise PathNotResolved(tag_name)
+                else:
+                    encoded_data = response.data.encode("utf-8")
+                    digest = calculate_digest(encoded_data)
+                    media_type = determine_media_type(manifest_data, response)
+
+                response_headers = {
+                    "Content-Type": media_type,
+                    "Docker-Content-Digest": digest,
+                }
+
+                # at this time, the manifest artifact was already established, and we can return it
+                # as it is; meanwhile, the dispatched task has created Manifest/Blob objects and
+                # relations between them; the said content units are streamed/downloaded on demand
+                # to a client on a next run
+                return web.Response(text=response.data, headers=response_headers)
+            else:
+                raise PathNotResolved(tag_name)
 
         # we do not convert OCI to docker
         oci_mediatypes = [MEDIA_TYPE.MANIFEST_OCI, MEDIA_TYPE.INDEX_OCI]
@@ -155,8 +228,7 @@ class Registry(Handler):
 
     async def dispatch_tag(self, request, tag, response_headers):
         """
-        Finds an artifact associated with a Tag and sends it to the client, otherwise tries
-        to stream it.
+        Finds an artifact associated with a Tag and sends it to the client.
 
         Args:
             request(:class:`~aiohttp.web.Request`): The request to prepare a response for.
@@ -169,13 +241,8 @@ class Registry(Handler):
                 streamed back to the client.
 
         """
-        try:
-            artifact = await tag.tagged_manifest._artifacts.aget()
-        except ObjectDoesNotExist:
-            ca = await sync_to_async(lambda x: x[0])(tag.tagged_manifest.contentartifact_set.all())
-            return await self._stream_content_artifact(request, web.StreamResponse(), ca)
-        else:
-            return await Registry._dispatch(artifact, response_headers)
+        artifact = await sync_to_async(tag.tagged_manifest._artifacts.get)()
+        return await Registry._dispatch(artifact, response_headers)
 
     @staticmethod
     async def dispatch_converted_schema(tag, accepted_media_types, path):
@@ -219,7 +286,6 @@ class Registry(Handler):
         """
         Return a response to the "GET" action.
         """
-
         path = request.match_info["path"]
         digest = "sha256:{digest}".format(digest=request.match_info["digest"])
         distribution = await sync_to_async(self._match_distribution)(path, add_trailing_slash=False)
