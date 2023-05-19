@@ -95,7 +95,9 @@ class RegistryAuthHttpDownloader(HttpDownloader):
                         return await self._run(handle_401=False, extra_data=extra_data)
                 else:
                     raise
+
             to_return = await self._handle_response(response)
+
             await response.release()
             self.response_headers = response.headers
 

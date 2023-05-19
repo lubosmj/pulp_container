@@ -4,6 +4,8 @@ import os
 from asgiref.sync import sync_to_async
 
 from aiohttp import web
+from django_guid import set_guid
+from django_guid.utils import generate_guid
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from multidict import MultiDict
@@ -11,10 +13,12 @@ from multidict import MultiDict
 from pulpcore.plugin.content import Handler, PathNotResolved
 from pulpcore.plugin.models import Content, ContentArtifact
 from pulpcore.plugin.content import ArtifactResponse
+from pulpcore.plugin.tasking import dispatch
 
 from pulp_container.app.cache import RegistryContentCache
 from pulp_container.app.models import ContainerDistribution, Tag, Blob
 from pulp_container.app.schema_convert import Schema2toSchema1ConverterWrapper
+from pulp_container.app.tasks import download_image_data
 from pulp_container.app.utils import get_accepted_media_types
 from pulp_container.constants import BLOB_CONTENT_TYPE, EMPTY_BLOB, MEDIA_TYPE
 
@@ -117,7 +121,25 @@ class Registry(Handler):
                 pk__in=await sync_to_async(repository_version.get_content)(), name=tag_name
             )
         except ObjectDoesNotExist:
-            raise PathNotResolved(tag_name)
+            if distribution.remote:
+                set_guid(generate_guid())
+
+                await sync_to_async(dispatch)(
+                    download_image_data(),
+                    exclusive_resources=[repository_version.repository],
+                    kwargs={
+                        "repository_pk": repository_version.repository.pk,
+                    },
+                )
+                repository = await repository_version.repository.acast()
+                try:
+                    tag = await repository.pending_tags.select_related("tagged_manifest").aget(
+                        name=tag_name
+                    )
+                except ObjectDoesNotExist:
+                    raise PathNotResolved(tag_name)
+            else:
+                raise PathNotResolved(tag_name)
 
         # we do not convert OCI to docker
         oci_mediatypes = [MEDIA_TYPE.MANIFEST_OCI, MEDIA_TYPE.INDEX_OCI]
@@ -131,6 +153,11 @@ class Registry(Handler):
                 )
             )
             raise PathNotResolved(tag_name)
+
+        # TODO: at this time, the manifest artifact was already established and we can return it
+        #   as it is; meanwhile, the dispatched task has created Manifest/Blob objects and relations
+        #   between them; the said content units are streamed/downloaded on demand to a client on
+        #   a next run
 
         # return schema1 (even in case only oci is requested)
         if tag.tagged_manifest.media_type == MEDIA_TYPE.MANIFEST_V1:
@@ -155,8 +182,7 @@ class Registry(Handler):
 
     async def dispatch_tag(self, request, tag, response_headers):
         """
-        Finds an artifact associated with a Tag and sends it to the client, otherwise tries
-        to stream it.
+        Finds an artifact associated with a Tag and sends it to the client.
 
         Args:
             request(:class:`~aiohttp.web.Request`): The request to prepare a response for.
@@ -169,13 +195,8 @@ class Registry(Handler):
                 streamed back to the client.
 
         """
-        try:
-            artifact = await tag.tagged_manifest._artifacts.aget()
-        except ObjectDoesNotExist:
-            ca = await sync_to_async(lambda x: x[0])(tag.tagged_manifest.contentartifact_set.all())
-            return await self._stream_content_artifact(request, web.StreamResponse(), ca)
-        else:
-            return await Registry._dispatch(artifact, response_headers)
+        artifact = await sync_to_async(tag.tagged_manifest._artifacts.get)()
+        return await Registry._dispatch(artifact, response_headers)
 
     @staticmethod
     async def dispatch_converted_schema(tag, accepted_media_types, path):
@@ -219,7 +240,6 @@ class Registry(Handler):
         """
         Return a response to the "GET" action.
         """
-
         path = request.match_info["path"]
         digest = "sha256:{digest}".format(digest=request.match_info["digest"])
         distribution = await sync_to_async(self._match_distribution)(path)
@@ -233,15 +253,15 @@ class Registry(Handler):
             content = await sync_to_async(repository_version.get_content)()
 
             repository = await sync_to_async(repository_version.repository.cast)()
-            if repository.PUSH_ENABLED:
-                pending_blobs = repository.pending_blobs.values_list("pk")
-                pending_manifests = repository.pending_manifests.values_list("pk")
-                pending_content = pending_blobs.union(pending_manifests)
-                content |= Content.objects.filter(pk__in=pending_content)
+            pending_blobs = repository.pending_blobs.values_list("pk")
+            pending_manifests = repository.pending_manifests.values_list("pk")
+            pending_content = pending_blobs.union(pending_manifests)
+            content |= Content.objects.filter(pk__in=pending_content)
 
             ca = await ContentArtifact.objects.select_related("artifact", "content").aget(
                 content__in=content, relative_path=digest
             )
+
             ca_content = await sync_to_async(ca.content.cast)()
             if isinstance(ca_content, Blob):
                 media_type = BLOB_CONTENT_TYPE
