@@ -11,18 +11,20 @@ import logging
 import hashlib
 import re
 
+from aiohttp.client_exceptions import ClientResponseError
 from itertools import chain
-from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 from tempfile import NamedTemporaryFile
 
 from django.core.files.storage import default_storage as storage
 from django.core.files.base import ContentFile, File
 from django.db import IntegrityError, transaction
+from django.db.models import F, Value
 from django.shortcuts import get_object_or_404
 
 from django.conf import settings
 
-from pulpcore.plugin.models import Artifact, ContentArtifact, UploadChunk
+from pulpcore.plugin.models import Artifact, ContentArtifact, Content, UploadChunk
 from pulpcore.plugin.files import PulpTemporaryUploadedFile
 from pulpcore.plugin.tasking import add_and_remove, dispatch
 from pulpcore.plugin.util import get_objects_for_user
@@ -85,6 +87,7 @@ from pulp_container.constants import (
     SIGNATURE_HEADER,
     SIGNATURE_PAYLOAD_MAX_SIZE,
     SIGNATURE_TYPE,
+    V2_ACCEPT_HEADERS,
 )
 
 log = logging.getLogger(__name__)
@@ -272,7 +275,8 @@ class ContainerRegistryApiMixin:
         try:
             distribution = models.ContainerDistribution.objects.get(base_path=path)
         except models.ContainerDistribution.DoesNotExist:
-            raise RepositoryNotFound(name=path)
+            # get a pull-through cache distribution whose base_path is a substring of path
+            return self.get_pull_through_drv(path)
         if distribution.repository:
             repository_version = distribution.repository.latest_version()
         elif distribution.repository_version:
@@ -280,6 +284,35 @@ class ContainerRegistryApiMixin:
         else:
             raise RepositoryNotFound(name=path)
         return distribution, distribution.repository, repository_version
+
+    def get_pull_through_drv(self, path):
+        root_cache_distribution = (
+            models.ContainerPullThroughDistribution.objects.annotate(path=Value(path))
+            .filter(path__startswith=F("base_path"))
+            .order_by("-base_path")
+            .first()
+        )
+        if not root_cache_distribution:
+            raise RepositoryNotFound(name=path)
+
+        cache_repository, _ = models.ContainerRepository.objects.get_or_create(
+            name=path, retain_repo_versions=1
+        )
+
+        upstream_name = path.split(root_cache_distribution.base_path, maxsplit=1)[1].strip("/")
+        cache_remote, _ = models.ContainerRemote.objects.get_or_create(
+            upstream_name=upstream_name, name=path, url=root_cache_distribution.remote.url
+        )
+
+        cache_distribution, _ = models.ContainerDistribution.objects.get_or_create(
+            base_path=path,
+            name=path,
+            repository=cache_repository,
+            remote=cache_remote,
+        )
+        root_cache_distribution.distributions.add(cache_distribution)
+
+        return cache_distribution, cache_repository, cache_repository.latest_version()
 
     def get_dr_push(self, request, path, create=False):
         """
@@ -935,9 +968,104 @@ class Blobs(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
                 except models.Blob.DoesNotExist:
                     raise BlobNotFound(digest=pk)
             else:
-                raise BlobNotFound(digest=pk)
+                if distribution.remote:
+                    blob = self.pull_blob_from_remote(distribution, request, pk)
+                    if not repository.remaining_blobs.all().exists():
+                        self.add_pending_content_to_repository(repository)
+
+                    return redirects.issue_blob_redirect(blob)
+                else:
+                    raise BlobNotFound(digest=pk)
 
         return redirects.issue_blob_redirect(blob)
+
+    def add_pending_content_to_repository(self, repository):
+        tags_to_remove = (
+            models.Tag.objects.filter(
+                pk__in=repository.latest_version().content.all(),
+                name__in=repository.pending_tags.values_list("name"),
+            )
+            .select_related("tagged_manifest__blobs")
+            .exclude(tagged_manifest__in=repository.pending_tags.values_list("tagged_manifest"))
+            .values_list("pk")
+        )
+        manifests_to_remove = (
+            models.Manifest.objects.filter(pk__in=tags_to_remove)
+            .select_related("blobs")
+            .values_list("pk")
+        )
+        blobs_to_remove = models.Blob.objects.filter(pk__in=manifests_to_remove.blobs).values_list(
+            "pk"
+        )
+        remove_content_units = Content.objects.filter(
+            pk__in=blobs_to_remove.union(manifests_to_remove.union(tags_to_remove))
+        )
+        pending_blobs = repository.pending_blobs.values_list("pk")
+        pending_manifests = repository.pending_manifests.values_list("pk")
+        pending_tags = repository.pending_tags.values_list("pk")
+        pending_content = pending_blobs.union(pending_manifests.union(pending_tags))
+        add_content_units = Content.objects.filter(pk__in=pending_content)
+        immediate_task = dispatch(
+            add_and_remove,
+            exclusive_resources=[repository],
+            kwargs={
+                "repository_pk": str(repository.pk),
+                "add_content_units": add_content_units,
+                "remove_content_units": remove_content_units,
+            },
+            immediate=True,
+            deferred=False,
+        )
+        if immediate_task.state == "completed":
+            pass
+        elif immediate_task.state == "canceled":
+            raise Throttled()
+        else:
+            raise Exception(str(immediate_task.error))
+
+    def pull_blob_from_remote(self, distribution, request, pk):
+        response = download_content(distribution.remote.cast(), pk, request)
+        response.artifact_attributes["file"] = response.path
+
+        digest = f'sha256:{response.artifact_attributes["sha256"]}'
+        artifact = _save_artifact(response.artifact_attributes)
+        blob = self._save_blob(artifact, digest)
+
+        repository = distribution.repository.cast()
+        repository.remaining_blobs.remove(blob)
+        repository.pending_blobs.add(blob)
+
+        manifests = repository.pending_manifests.exclude(
+            media_type__in=(
+                models.MEDIA_TYPE.MANIFEST_LIST,
+                models.MEDIA_TYPE.INDEX_OCI,
+            )
+        )
+        for m in manifests:
+            m_data = _read_manifest(m)
+            if m_data["config"]["digest"] == blob.digest:
+                m.config_blob = blob
+                m.save()
+            elif any(blob.digest == layer["digest"] for layer in m_data["layers"]):
+                models.BlobManifest(manifest=m, manifest_blob=blob)
+
+        return blob
+
+    def _save_blob(self, artifact, digest):
+        # the blob in question should be already saved after pulling its manifest
+        blob = models.Blob.objects.get(digest=digest)
+        blob.touch()
+
+        ca = ContentArtifact(artifact=artifact, content=blob, relative_path=digest)
+        try:
+            ca.save()
+        except IntegrityError:
+            # re-upload artifact in case it was previously removed.
+            ca = ContentArtifact.objects.get(content=blob, relative_path=digest)
+            if not ca.artifact:
+                ca.artifact = artifact
+                ca.save(update_fields=["artifact"])
+        return blob
 
 
 class Manifests(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
@@ -973,13 +1101,33 @@ class Manifests(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
             try:
                 tag = models.Tag.objects.get(name=pk, pk__in=repository_version.content)
             except models.Tag.DoesNotExist:
-                raise ManifestNotFound(reference=pk)
+                if distribution.remote:
+                    remote = distribution.remote.cast()
+                    repository = distribution.repository.cast()
+                    manifest = self.get_manifest_from_local_storage(remote, pk)
+                    if not manifest:
+                        manifest = self.pull_manifest_from_remote(remote, request, pk)
+                    self.handle_pending_manifest(manifest, repository, pk)
+
+                    tag = models.Tag(name=pk, tagged_manifest=manifest)
+                    try:
+                        tag.save()
+                    except IntegrityError:
+                        tag = models.Tag.objects.get(name=tag.name, tagged_manifest=manifest)
+                        tag.touch()
+
+                    repository.pending_tags.add(tag)
+
+                    return redirects.issue_tag_redirect(tag)
+                else:
+                    raise ManifestNotFound(reference=pk)
 
             return redirects.issue_tag_redirect(tag)
         else:
             try:
                 manifest = models.Manifest.objects.get(digest=pk, pk__in=repository_version.content)
-            except models.Manifest.DoesNotExit:
+            except models.Manifest.DoesNotExist:
+                repository = repository.cast()
                 if repository.PUSH_ENABLED:
                     # the manifest might be a part of listed manifests currently being uploaded
                     try:
@@ -988,9 +1136,92 @@ class Manifests(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
                     except models.Manifest.DoesNotExist:
                         raise ManifestNotFound(reference=pk)
                 else:
-                    ManifestNotFound(reference=pk)
+                    if distribution.remote:
+                        remote = distribution.remote.cast()
+                        repository = distribution.repository.cast()
+                        manifest = self.pull_manifest_from_remote(remote, request, pk)
+                        self.handle_pending_manifest(manifest, repository, pk)
+                        manifest_lists = repository.pending_manifests.filter(
+                            media_type__in=(
+                                models.MEDIA_TYPE.MANIFEST_LIST,
+                                models.MEDIA_TYPE.INDEX_OCI,
+                            )
+                        )
+                        for ml in manifest_lists:
+                            ml_data = _read_manifest(ml)
+                            for m in ml_data["manifests"]:
+                                if m["digest"] == f"sha256:{manifest.digest}":
+                                    platform = m["platform"]
+                                    models.ManifestListManifest.objects.get_or_create(
+                                        manifest_list=manifest,
+                                        image_manifest=ml,
+                                        architecture=platform["architecture"],
+                                        os=platform["os"],
+                                        features=platform.get("features", ""),
+                                        variant=platform.get("variant", ""),
+                                        os_version=platform.get("os.version", ""),
+                                        os_features=platform.get("os.features", ""),
+                                    )
+                                    break
+
+                        return redirects.issue_manifest_redirect(manifest)
+                    else:
+                        ManifestNotFound(reference=pk)
 
             return redirects.issue_manifest_redirect(manifest)
+
+    def get_manifest_from_local_storage(self, remote, pk):
+        relative_url = "/v2/{name}/manifests/{tag}".format(
+            name=remote.namespaced_upstream_name, tag=pk
+        )
+        tag_url = urljoin(remote.url, relative_url)
+        downloader = remote.get_downloader(url=tag_url)
+        try:
+            response = downloader.fetch(
+                extra_data={"headers": V2_ACCEPT_HEADERS, "http_method": "head"}
+            )
+        except ClientResponseError:
+            raise ManifestNotFound(reference=pk)
+
+        digest = response.headers.get("docker-content-digest")
+        return models.Manifest.objects.filter(digest=digest).first()
+
+    def pull_manifest_from_remote(self, remote, request, pk):
+        response = download_content(remote, pk, request)
+
+        with open(response.path, "rb") as content_file:
+            try:
+                manifest_data = json.load(content_file)
+            except json.decoder.JSONDecodeError:
+                raise ManifestNotFound(reference=pk)
+        response.artifact_attributes["file"] = response.path
+
+        digest = f'sha256:{response.artifact_attributes["sha256"]}'
+        media_type = determine_media_type(manifest_data, response)
+
+        artifact = _save_artifact(response.artifact_attributes)
+        return self._save_manifest(artifact, digest, media_type)
+
+    def handle_pending_manifest(self, manifest, repository, pk):
+        content = repository.latest_version().get_content()
+        if not content.filter(pk=manifest.pk).exists():
+            repository.pending_manifests.add(manifest)
+            manifest.touch()
+
+        if manifest.media_type not in (
+            models.MEDIA_TYPE.MANIFEST_LIST,
+            models.MEDIA_TYPE.INDEX_OCI,
+        ):
+            manifest_data = _read_manifest(manifest)
+            blob_digests = [layer["digest"] for layer in manifest_data["layers"]]
+            blob_digests.append(manifest_data["config"]["digest"])
+            for d in blob_digests:
+                blob = models.Blob(digest=d)
+                try:
+                    blob.save()
+                except IntegrityError:
+                    blob = models.Blob.objects.get(digest=d)
+                repository.remaining_blobs.add(blob)
 
     def put(self, request, path, pk=None):
         """
@@ -1234,7 +1465,13 @@ class Signatures(ContainerRegistryApiMixin, ViewSet):
         try:
             manifest = models.Manifest.objects.get(digest=pk, pk__in=repository_version.content)
         except models.Manifest.DoesNotExist:
-            raise ManifestNotFound(reference=pk)
+            try:
+                repository = repository_version.repository.cast()
+                manifest = models.Manifest.objects.get(
+                    digest=pk, pk__in=repository.pending_manifests.values_list("pk")
+                )
+            except models.Manifest.DoesNotExist:
+                raise ManifestNotFound(reference=pk)
 
         signatures = models.ManifestSignature.objects.filter(
             signed_manifest=manifest, pk__in=repository_version.content
@@ -1323,3 +1560,36 @@ class Signatures(ContainerRegistryApiMixin, ViewSet):
                 return ManifestSignatureResponse(signature, path)
         else:
             raise Exception(str(immediate_task.error))
+
+
+def download_content(remote, pk, request):
+    content_type = request.path.rsplit("/", maxsplit=2)[-2]
+
+    relative_url = f"/v2/{remote.namespaced_upstream_name}/{content_type}/{pk}"
+    url = urljoin(remote.url, relative_url)
+
+    downloader = remote.get_downloader(url=url)
+    try:
+        response = downloader.fetch(extra_data={"headers": V2_ACCEPT_HEADERS})
+    except ClientResponseError:
+        raise ManifestNotFound(reference=pk)
+    return response
+
+
+def _save_artifact(artifact_attributes):
+    saved_artifact = Artifact(**artifact_attributes)
+    try:
+        saved_artifact.save()
+    except IntegrityError:
+        del artifact_attributes["file"]
+        saved_artifact = Artifact.objects.get(**artifact_attributes)
+        saved_artifact.touch()
+    return saved_artifact
+
+
+def _read_manifest(manifest):
+    artifact = manifest._artifacts.get()
+    raw_data = artifact.file.read()
+    manifest_data = json.loads(raw_data)
+    artifact.file.close()
+    return manifest_data

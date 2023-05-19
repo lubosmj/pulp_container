@@ -429,6 +429,16 @@ class ContainerRemoteViewSet(RemoteViewSet, RolesMixin):
     }
 
 
+class ContainerPullThroughRemoteViewSet(RemoteViewSet, RolesMixin):
+    """
+    TODO: Add permissions.
+    """
+
+    endpoint_name = "pull-through"
+    queryset = models.ContainerPullThroughRemote.objects.all()
+    serializer_class = serializers.ContainerPullThroughRemoteSerializer
+
+
 class TagOperationsMixin:
     """
     A mixin that adds functionality for creating and deleting tags.
@@ -1300,6 +1310,16 @@ class ContainerDistributionViewSet(DistributionViewSet, RolesMixin):
             general_multi_delete, exclusive_resources=reservations, args=(instance_ids,)
         )
         return OperationPostponedResponse(async_result, request)
+
+
+class ContainerPullThroughDistributionViewSet(DistributionViewSet, RolesMixin):
+    """
+    TODO: Add permissions.
+    """
+
+    endpoint_name = "pull-through"
+    queryset = models.ContainerPullThroughDistribution.objects.all()
+    serializer_class = serializers.ContainerPullThroughDistributionSerializer
 
 
 class ContainerNamespaceViewSet(

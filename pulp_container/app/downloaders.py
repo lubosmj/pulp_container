@@ -3,13 +3,18 @@ import asyncio
 import json
 import ssl
 import re
+import tempfile
 
 from aiohttp.client_exceptions import ClientResponseError
 from logging import getLogger
 from multidict import MultiDict
 from urllib import parse
 
+from django.conf import settings
+
+from pulpcore.plugin.models import Artifact, Task
 from pulpcore.plugin.download import DownloaderFactory, HttpDownloader
+from pulpcore.plugin import pulp_hashlib
 
 from pulp_container.constants import V2_ACCEPT_HEADERS
 
@@ -95,13 +100,46 @@ class RegistryAuthHttpDownloader(HttpDownloader):
                         return await self._run(handle_401=False, extra_data=extra_data)
                 else:
                     raise
+
             to_return = await self._handle_response(response)
+
             await response.release()
             self.response_headers = response.headers
 
         if self._close_session_on_finalize:
             self.session.close()
         return to_return
+
+    def _ensure_writer_has_open_file(self):
+        """
+        Create a temporary file on demand.
+
+        Create a temporary file when it's actually used, allowing plugin writers to instantiate
+        many downloaders in memory.
+
+        This method sets the path of NamedTemporaryFile dynamically based on whether it is running
+        from a task or not. Otherwise, permission errors might be raised when Pulp is trying to
+        download a file from api-app and write to a user space.
+        """
+        if not self._writer:
+            dir_path = settings.WORKING_DIRECTORY if Task.current() is None else "."
+            self._writer = tempfile.NamedTemporaryFile(dir=dir_path, delete=False)
+            self.path = self._writer.name
+            self._digests = {n: pulp_hashlib.new(n) for n in Artifact.DIGEST_FIELDS}
+            self._size = 0
+
+    def fetch(self, extra_data=None):
+        """
+        Run the download synchronously with additional data and return the `DownloadResult`.
+
+        Returns:
+            :class:`~pulpcore.plugin.download.DownloadResult`
+                or :class:`~aiohttp.client.ClientResponse`
+
+        Raises:
+            Exception: Any fatal exception emitted during downloading
+        """
+        return asyncio.get_event_loop().run_until_complete(self.run(extra_data=extra_data))
 
     async def update_token(self, response_auth_header, used_token, repo_name):
         """

@@ -117,7 +117,16 @@ class Registry(Handler):
                 pk__in=await sync_to_async(repository_version.get_content)(), name=tag_name
             )
         except ObjectDoesNotExist:
-            raise PathNotResolved(tag_name)
+            if distribution.remote:
+                repository = await repository_version.repository.acast()
+                try:
+                    tag = await repository.pending_tags.select_related("tagged_manifest").aget(
+                        name=tag_name
+                    )
+                except ObjectDoesNotExist:
+                    raise PathNotResolved(tag_name)
+            else:
+                raise PathNotResolved(tag_name)
 
         # we do not convert OCI to docker
         oci_mediatypes = [MEDIA_TYPE.MANIFEST_OCI, MEDIA_TYPE.INDEX_OCI]
@@ -155,8 +164,7 @@ class Registry(Handler):
 
     async def dispatch_tag(self, request, tag, response_headers):
         """
-        Finds an artifact associated with a Tag and sends it to the client, otherwise tries
-        to stream it.
+        Finds an artifact associated with a Tag and sends it to the client.
 
         Args:
             request(:class:`~aiohttp.web.Request`): The request to prepare a response for.
@@ -169,13 +177,8 @@ class Registry(Handler):
                 streamed back to the client.
 
         """
-        try:
-            artifact = await tag.tagged_manifest._artifacts.aget()
-        except ObjectDoesNotExist:
-            ca = await sync_to_async(lambda x: x[0])(tag.tagged_manifest.contentartifact_set.all())
-            return await self._stream_content_artifact(request, web.StreamResponse(), ca)
-        else:
-            return await Registry._dispatch(artifact, response_headers)
+        artifact = await sync_to_async(tag.tagged_manifest._artifacts.get)()
+        return await Registry._dispatch(artifact, response_headers)
 
     @staticmethod
     async def dispatch_converted_schema(tag, accepted_media_types, path):
@@ -219,7 +222,6 @@ class Registry(Handler):
         """
         Return a response to the "GET" action.
         """
-
         path = request.match_info["path"]
         digest = "sha256:{digest}".format(digest=request.match_info["digest"])
         distribution = await sync_to_async(self._match_distribution)(path)
@@ -233,15 +235,15 @@ class Registry(Handler):
             content = await sync_to_async(repository_version.get_content)()
 
             repository = await sync_to_async(repository_version.repository.cast)()
-            if repository.PUSH_ENABLED:
-                pending_blobs = repository.pending_blobs.values_list("pk")
-                pending_manifests = repository.pending_manifests.values_list("pk")
-                pending_content = pending_blobs.union(pending_manifests)
-                content |= Content.objects.filter(pk__in=pending_content)
+            pending_blobs = repository.pending_blobs.values_list("pk")
+            pending_manifests = repository.pending_manifests.values_list("pk")
+            pending_content = pending_blobs.union(pending_manifests)
+            content |= Content.objects.filter(pk__in=pending_content)
 
             ca = await ContentArtifact.objects.select_related("artifact", "content").aget(
                 content__in=content, relative_path=digest
             )
+
             ca_content = await sync_to_async(ca.content.cast)()
             if isinstance(ca_content, Blob):
                 media_type = BLOB_CONTENT_TYPE
