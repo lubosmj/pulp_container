@@ -123,32 +123,35 @@ Pull-Through Caching
 --------------------
 
 The Pull-Through Caching feature offers an alternative way to host content by leveraging a **remote
-registry** as the source of truth. This eliminates the need for repository synchronization, reducing
-storage overhead, and ensuring up-to-date images. Pulp acts as a **caching proxy** and stores images
-in a local repository.
+registry** as the source of truth. This eliminates the need for in-advance repository
+synchronization because Pulp acts as a **caching proxy** and stores images, after they have been
+pulled by an end client, in a local repository.
 
-Administering the caching::
+Configuring the caching::
 
     # initialize a pull-through remote (the concept of upstream-name is not applicable here)
     REMOTE_HREF=$(http ${BASE_ADDR}/pulp/api/v3/remotes/container/pull-through/ name=docker-cache url=https://registry-1.docker.io | jq -r ".pulp_href")
 
-    # create a specialized distribution linked to the initialized remote
+    # create a pull-through distribution linked to the initialized remote
     http ${BASE_ADDR}/pulp/api/v3/distributions/container/pull-through/ remote=${REMOTE_HREF} name=docker-cache base_path=docker-cache
 
-Downloading content::
+Pulling content::
 
     podman pull localhost:24817/docker-cache/library/busybox
 
-In the example above, the image "busybox" is pulled from the "docker-cache" distribution, acting as
-a transparent caching layer.
+In the example above, the image "busybox" is pulled from *DockerHub* through the "docker-cache"
+distribution, acting as a transparent caching layer.
 
-By incorporating the Pull-Through Caching feature, administrators can **reduce external network
-dependencies**, and ensure a more reliable and responsive container deployment system in production
-environments.
+By incorporating the Pull-Through Caching feature into standard workflows, users **do not need** to
+pre-configure a new repository and sync it to facilitate the retrieval of the actual content. This
+speeds up the whole process of shipping containers from its early management stages to distribution.
+Similarly to on-demand syncing, the feature also **reduces external network dependencies**, and
+ensures a more reliable container deployment system in production environments.
 
 .. note::
-    Pulp creates repositories that maintain a single repository version for user-pulled images.
+    Pulp creates repositories that maintain a single repository version for pulled images.
     Thus, only the latest repository version is retained. For instance, when pulling "debian:10,"
-    a "debian" repository with the "10" tag is established. Subsequent pulls such as "debian:11"
+    a "debian" repository with the "10" tag is created. Subsequent pulls such as "debian:11"
     result in a new repository version that incorporates both tags while removing the previous
-    version. Repositories and their content remain manageable through standard API endpoints.
+    version. Repositories and their content remain manageable through standard Pulp API endpoints.
+    With that, no content can be pushed to these repositories.

@@ -4,24 +4,26 @@ import logging
 import os
 
 from asgiref.sync import sync_to_async
+from tempfile import NamedTemporaryFile
 
+from contextlib import suppress
 from urllib.parse import urljoin
 
 from aiohttp import web
-from aiohttp.web_exceptions import HTTPTooManyRequests
 from django_guid import set_guid
 from django_guid.utils import generate_guid
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import IntegrityError
 from multidict import MultiDict
 
 from pulpcore.plugin.content import Handler, PathNotResolved
-from pulpcore.plugin.models import Content, ContentArtifact, Task
+from pulpcore.plugin.models import Artifact, RemoteArtifact, Content, ContentArtifact, Task
 from pulpcore.plugin.content import ArtifactResponse
 from pulpcore.plugin.tasking import dispatch
 
 from pulp_container.app.cache import RegistryContentCache
-from pulp_container.app.models import ContainerDistribution, Tag, Blob
+from pulp_container.app.models import ContainerDistribution, Tag, Blob, Manifest, BlobManifest
 from pulp_container.app.schema_convert import Schema2toSchema1ConverterWrapper
 from pulp_container.app.tasks import download_image_data
 from pulp_container.app.utils import (
@@ -32,10 +34,6 @@ from pulp_container.app.utils import (
 from pulp_container.constants import BLOB_CONTENT_TYPE, EMPTY_BLOB, MEDIA_TYPE, V2_ACCEPT_HEADERS
 
 log = logging.getLogger(__name__)
-
-
-v2_headers = MultiDict()
-v2_headers["Docker-Distribution-API-Version"] = "registry/2.0"
 
 
 class Registry(Handler):
@@ -141,7 +139,7 @@ class Registry(Handler):
                 response = await downloader.run(extra_data={"headers": V2_ACCEPT_HEADERS})
 
                 set_guid(generate_guid())
-                task = await sync_to_async(dispatch)(
+                await sync_to_async(dispatch)(
                     download_image_data,
                     exclusive_resources=[repository_version.repository],
                     kwargs={
@@ -150,38 +148,117 @@ class Registry(Handler):
                         "tag_name": tag_name,
                         "response_data": response.data,
                     },
+                    immediate=True,
+                    deferred=True,
                 )
-
-                # waiting shortly for the task to be completed since a container client could
-                # request related content (i.e., manifests and blobs) and halt the pull operation
-                # if the content was not immediately served
-                for dummy in range(3):
-                    time.sleep(1)
-                    task = await Task.objects.aget(pk=task.pk)
-                    if task.state == "completed":
-                        await task.adelete()
-                        break
-                    elif task.state in ["waiting", "running"]:
-                        continue
-                    else:
-                        error = task.error
-                        await task.adelete()
-                        raise Exception(str(error))
-                else:
-                    raise HTTPTooManyRequests()
 
                 try:
                     manifest_data = json.loads(response.data)
                 except json.decoder.JSONDecodeError:
                     raise PathNotResolved(tag_name)
                 else:
-                    encoded_data = response.data.encode("utf-8")
-                    digest = calculate_digest(encoded_data)
                     media_type = determine_media_type(manifest_data, response)
+                    if media_type in (MEDIA_TYPE.MANIFEST_V1_SIGNED, MEDIA_TYPE.MANIFEST_V1):
+                        encoded_data = response.data.encode("utf-8")
+                        digest = calculate_digest(encoded_data)
+                    else:
+                        # digest = response.artifact_attributes["sha256"]
+                        encoded_data = response.data.encode("utf-8")
+                        digest = calculate_digest(encoded_data)
+
+                    # TODO: consider saving a manifest list too
+                    if media_type not in (MEDIA_TYPE.MANIFEST_LIST, MEDIA_TYPE.INDEX_OCI):
+                        config_digest = manifest_data["config"]["digest"]
+                        config_blob = await self.save_config_blob(config_digest, remote)
+                        manifest = Manifest(
+                            digest=digest,
+                            schema_version=2,
+                            media_type=media_type,
+                            config_blob=config_blob,
+                        )
+                        try:
+                            await manifest.asave()
+                        except IntegrityError:
+                            manifest = await Manifest.objects.aget(digest=manifest.digest)
+                            await sync_to_async(manifest.touch)()
+
+                        ras_to_create = []
+                        cas_to_create = []
+                        bm_rels_to_create = []
+                        for layer in manifest_data["layers"]:
+                            digest = layer["digest"]
+
+                            blob = Blob(digest=digest)
+                            try:
+                                await blob.asave()
+                            except IntegrityError:
+                                blob = await Blob.objects.aget(digest=digest)
+                                await sync_to_async(blob.touch)()
+
+                            bm_rel = BlobManifest(manifest=manifest, manifest_blob=blob)
+                            with suppress(IntegrityError):
+                                await bm_rel.asave()
+                            bm_rels_to_create.append(bm_rel)
+
+                            ca = ContentArtifact(
+                                content=blob,
+                                artifact=None,
+                                relative_path=digest,
+                            )
+                            with suppress(IntegrityError):
+                                await ca.asave()
+                            cas_to_create.append(ca)
+
+                            relative_url = "/v2/{name}/blobs/{digest}".format(
+                                name=remote.namespaced_upstream_name, digest=digest
+                            )
+                            blob_url = urljoin(remote.url, relative_url)
+                            ra = RemoteArtifact(
+                                url=blob_url,
+                                sha256=digest[len("sha256:") :],
+                                content_artifact=ca,
+                                remote=remote,
+                            )
+                            with suppress(IntegrityError):
+                                await ra.asave()
+                            ras_to_create.append(ra)
+
+                        if ras_to_create:
+                            # in pulpcore, we usually care about the order to prevent deadlocks;
+                            # having only a small set of blobs here might not cause any troubles
+                            pass
+                            #await sync_to_async(
+                            #    BlobManifest.objects.bulk_create
+                            #)(bm_rels_to_create, ignore_conflicts=True)
+                            #await sync_to_async(
+                            #    ContentArtifact.objects.bulk_create
+                            #)(cas_to_create, ignore_conflicts=True)
+                            #await sync_to_async(
+                            #    RemoteArtifact.objects.bulk_create
+                            #)(ras_to_create, ignore_conflicts=True)
+
+                        with NamedTemporaryFile(
+                            mode="w", dir=settings.WORKING_DIRECTORY, delete=False
+                        ) as tmp_file:
+                            tmp_file.write(response.data)
+                            tmp_file.flush()
+                            try:
+                                artifact = Artifact.init_and_validate(tmp_file.name)
+                                await artifact.asave()
+                            except IntegrityError:
+                                artifact = await Artifact.objects.aget(sha256=artifact.sha256)
+                                await sync_to_async(artifact.touch)()
+
+                        content_artifact = ContentArtifact(
+                            artifact=artifact, content=manifest, relative_path=manifest.digest
+                        )
+                        with suppress(IntegrityError):
+                            await content_artifact.asave()
 
                 response_headers = {
                     "Content-Type": media_type,
                     "Docker-Content-Digest": digest,
+                    "Docker-Distribution-API-Version": "registry/2.0",
                 }
 
                 # at this time, the manifest artifact was already established, and we can return it
@@ -191,6 +268,46 @@ class Registry(Handler):
                 return web.Response(text=response.data, headers=response_headers)
             else:
                 raise PathNotResolved(tag_name)
+        else:
+            if distribution.remote and distribution.pull_through_distribution_id:
+                # check if the content was updated on the remove and stream it back
+                remote = await distribution.remote.acast()
+                relative_url = "/v2/{name}/manifests/{tag}".format(
+                    name=remote.namespaced_upstream_name, tag=tag_name
+                )
+                tag_url = urljoin(remote.url, relative_url)
+                downloader = remote.get_in_memory_downloader(url=tag_url)
+                response = await downloader.run(extra_data={"headers": V2_ACCEPT_HEADERS})
+
+                try:
+                    manifest_data = json.loads(response.data)
+                except json.decoder.JSONDecodeError:
+                    raise PathNotResolved(tag_name)
+
+                media_type = determine_media_type(manifest_data, response)
+                if media_type in (MEDIA_TYPE.MANIFEST_V1_SIGNED, MEDIA_TYPE.MANIFEST_V1):
+                    encoded_data = response.data.encode("utf-8")
+                    digest = calculate_digest(encoded_data)
+                else:
+                    # TODO: in_memory_downloader does not have artifact_attributes
+                    encoded_data = response.data.encode("utf-8")
+                    digest = calculate_digest(encoded_data)
+                    # digest = response.artifact_attributes["sha256"]
+
+                if tag.manifest.digest != digest:
+                    set_guid(generate_guid())
+                    await sync_to_async(dispatch)(
+                        download_image_data,
+                        exclusive_resources=[repository_version.repository],
+                        kwargs={
+                            "repository_pk": repository_version.repository.pk,
+                            "remote_pk": remote.pk,
+                            "tag_name": tag_name,
+                            "response_data": response.data,
+                        },
+                        immediate=True,
+                        deferred=True,
+                    )
 
         # we do not convert OCI to docker
         oci_mediatypes = [MEDIA_TYPE.MANIFEST_OCI, MEDIA_TYPE.INDEX_OCI]
@@ -226,9 +343,49 @@ class Registry(Handler):
         # convert if necessary
         return await Registry.dispatch_converted_schema(tag, accepted_media_types, path)
 
+    async def save_config_blob(self, config_digest, remote):
+        relative_url = "/v2/{name}/blobs/{digest}".format(
+            name=remote.namespaced_upstream_name, digest=config_digest
+        )
+        blob_url = urljoin(remote.url, relative_url)
+        downloader = remote.get_in_memory_downloader(url=blob_url)
+        response = await downloader.run()
+
+        with NamedTemporaryFile(mode="w", dir=settings.WORKING_DIRECTORY, delete=False) as tmp_file:
+            tmp_file.write(response.data)
+            tmp_file.flush()
+            try:
+                config_blob_artifact = Artifact.init_and_validate(tmp_file.name)
+                await config_blob_artifact.asave()
+                assert (
+                    config_blob_artifact.sha256 == config_digest[len("sha256:") :]
+                )
+            except IntegrityError:
+                config_blob_artifact = await Artifact.objects.aget(
+                    sha256=config_blob_artifact.sha256
+                )
+                await sync_to_async(config_blob_artifact.touch)()
+
+        config_blob = Blob(digest=config_digest)
+        try:
+            await config_blob.asave()
+        except IntegrityError:
+            pass
+
+        content_artifact = ContentArtifact(
+            content=config_blob,
+            artifact=config_blob_artifact,
+            relative_path=config_digest,
+        )
+        with suppress(IntegrityError):
+            await content_artifact.asave()
+
+        return config_blob
+
     async def dispatch_tag(self, request, tag, response_headers):
         """
-        Finds an artifact associated with a Tag and sends it to the client.
+        Finds an artifact associated with a Tag and sends it to the client, otherwise tries
+        to stream it.
 
         Args:
             request(:class:`~aiohttp.web.Request`): The request to prepare a response for.
@@ -241,8 +398,13 @@ class Registry(Handler):
                 streamed back to the client.
 
         """
-        artifact = await sync_to_async(tag.tagged_manifest._artifacts.get)()
-        return await Registry._dispatch(artifact, response_headers)
+        try:
+            artifact = await tag.tagged_manifest._artifacts.aget()
+        except ObjectDoesNotExist:
+            ca = await sync_to_async(lambda x: x[0])(tag.tagged_manifest.contentartifact_set.all())
+            return await self._stream_content_artifact(request, web.StreamResponse(), ca)
+        else:
+            return await Registry._dispatch(artifact, response_headers)
 
     @staticmethod
     async def dispatch_converted_schema(tag, accepted_media_types, path):
@@ -299,11 +461,10 @@ class Registry(Handler):
             content = await sync_to_async(repository_version.get_content)()
 
             repository = await sync_to_async(repository_version.repository.cast)()
-            if repository.PUSH_ENABLED:
-                pending_blobs = repository.pending_blobs.values_list("pk")
-                pending_manifests = repository.pending_manifests.values_list("pk")
-                pending_content = pending_blobs.union(pending_manifests)
-                content |= Content.objects.filter(pk__in=pending_content)
+            pending_blobs = repository.pending_blobs.values_list("pk")
+            pending_manifests = repository.pending_manifests.values_list("pk")
+            pending_content = pending_blobs.union(pending_manifests)
+            content |= Content.objects.filter(pk__in=pending_content)
 
             ca = await ContentArtifact.objects.select_related("artifact", "content").aget(
                 content__in=content, relative_path=digest

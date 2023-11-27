@@ -609,6 +609,8 @@ class ContainerRepository(
     manifest_signing_service = models.ForeignKey(
         ManifestSigningService, on_delete=models.SET_NULL, null=True
     )
+    pending_blobs = models.ManyToManyField(Blob)
+    pending_manifests = models.ManyToManyField(Manifest)
 
     class Meta:
         default_related_name = "%(app_label)s_%(model_name)s"
@@ -632,6 +634,15 @@ class ContainerRepository(
         """
         remove_duplicates(new_version)
         validate_repo_version(new_version)
+        self.remove_pending_content(new_version)
+
+    def remove_pending_content(self, repository_version):
+        """Remove pending blobs and manifests when committing the content to the repository."""
+        added_content = repository_version.added(
+            base_version=repository_version.base_version
+        ).values_list("pk")
+        self.pending_blobs.remove(*Blob.objects.filter(pk__in=added_content))
+        self.pending_manifests.remove(*Manifest.objects.filter(pk__in=added_content))
 
 
 class ContainerPushRepository(Repository, AutoAddObjPermsMixin):
@@ -694,6 +705,22 @@ class ContainerPullThroughDistribution(Distribution, AutoAddObjPermsMixin):
     """
 
     TYPE = "pull-through"
+
+    namespace = models.ForeignKey(
+        ContainerNamespace,
+        on_delete=models.CASCADE,
+        related_name="container_pull_through_distributions",
+        null=True,
+    )
+    private = models.BooleanField(
+        default=False,
+        help_text=_(
+            "Restrict pull access to explicitly authorized users. "
+            "Related distributions inherit this value. "
+            "Defaults to unrestricted pull access."
+        ),
+    )
+    description = models.TextField(null=True)
 
     class Meta:
         default_related_name = "%(app_label)s_%(model_name)s"

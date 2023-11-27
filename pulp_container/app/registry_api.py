@@ -993,9 +993,12 @@ class Manifests(RedirectsMixin, ContainerRegistryApiMixin, ViewSet):
             try:
                 tag = models.Tag.objects.get(name=pk, pk__in=repository_version.content)
             except models.Tag.DoesNotExist:
-                if distribution.remote:
+                if distribution.remote and distribution.pull_through_distribution_id:
                     remote = distribution.remote.cast()
                     repository = distribution.repository.cast()
+                    # issue a head request first to ensure that the content exists on the remote
+                    # source; we want to prevent immediate "not found" error responses from
+                    # content-app: 302 (api-app) -> 404 (content-app)
                     manifest = self.fetch_manifest(remote, repository_version, repository, pk)
                     if manifest is None:
                         return redirects.redirect_to_content_app("manifests", pk)

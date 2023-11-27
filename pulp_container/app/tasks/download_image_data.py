@@ -9,32 +9,24 @@ from asgiref.sync import sync_to_async
 from django.db import IntegrityError
 
 from pulpcore.plugin.models import Artifact
-from pulpcore.plugin.stages import (
-    ArtifactDownloader,
-    ArtifactSaver,
-    DeclarativeContent,
-    DeclarativeVersion,
-    RemoteArtifactSaver,
-    ResolveContentFutures,
-    QueryExistingArtifacts,
-    QueryExistingContents,
-)
+from pulpcore.plugin.stages import DeclarativeContent
 
 from pulp_container.app.models import ContainerRemote, ContainerRepository, Tag
 from pulp_container.app.utils import determine_media_type_from_json
 from pulp_container.constants import MEDIA_TYPE
 
-from .sync_stages import ContainerContentSaver, ContainerFirstStage
+from .synchronize import ContainerDeclarativeVersion
+from .sync_stages import ContainerFirstStage
 
 log = logging.getLogger(__name__)
 
 
 def download_image_data(repository_pk, remote_pk, tag_name, response_data):
     repository = ContainerRepository.objects.get(pk=repository_pk)
-    remote = ContainerRemote.objects.get(pk=remote_pk).cast()
+    remote = ContainerRemote.objects.get(pk=remote_pk)
     log.info("Pulling cache: repository={r} remote={p}".format(r=repository.name, p=remote.name))
     first_stage = ContainerPullThroughFirstStage(remote, tag_name, response_data)
-    dv = ContainerPullThroughCacheDeclarativeVersion(first_stage, repository, mirror=False)
+    dv = ContainerDeclarativeVersion(first_stage, repository, mirror=True)
     return dv.create()
 
 
@@ -52,7 +44,7 @@ class ContainerPullThroughFirstStage(ContainerFirstStage):
         tag_dc = DeclarativeContent(Tag(name=self.tag_name))
 
         content_data = json.loads(self.response_data)
-        with NamedTemporaryFile("w") as temp_file:
+        with NamedTemporaryFile(dir=".", mode="w") as temp_file:
             temp_file.write(self.response_data)
             temp_file.flush()
 
@@ -114,34 +106,3 @@ class ContainerPullThroughFirstStage(ContainerFirstStage):
         tagged_manifest_dc = tag_dc.extra_data["tagged_manifest_dc"]
         tag_dc.content.tagged_manifest = await tagged_manifest_dc.resolution()
         await self.put(tag_dc)
-
-
-class ContainerPullThroughCacheDeclarativeVersion(DeclarativeVersion):
-    """
-    Subclassed Declarative version that creates a pipeline for caching remote content.
-    """
-
-    def pipeline_stages(self, new_version):
-        """
-        Define the "architecture" of caching remote content.
-
-        Args:
-            new_version (:class:`~pulpcore.plugin.models.RepositoryVersion`): The
-                new repository version that is going to be built.
-
-        Returns:
-            list: List of :class:`~pulpcore.plugin.stages.Stage` instances
-
-        """
-        pipeline = [
-            self.first_stage,
-            QueryExistingArtifacts(),
-            ArtifactDownloader(),
-            ArtifactSaver(),
-            QueryExistingContents(),
-            ContainerContentSaver(),
-            RemoteArtifactSaver(),
-            ResolveContentFutures(),
-        ]
-
-        return pipeline
